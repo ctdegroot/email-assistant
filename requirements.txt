@@ -1,0 +1,6 @@
+anthropic
+slack-sdk
+python-dotenv
+requests
+icalendar
+pytz

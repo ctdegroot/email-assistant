@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "email-to-motion"
+version = "0.1.0"
+description = "Convert forwarded emails into Motion tasks and Outlook calendar events via Claude AI."
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic",
+    "slack-sdk",
+    "python-dotenv",
+    "requests",
+    "icalendar",
+    "pytz",
+]
+
+[project.scripts]
+email-to-motion = "email_to_motion.cli:main"

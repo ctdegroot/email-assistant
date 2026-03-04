@@ -1,0 +1,24 @@
+[Unit]
+Description=Email to Motion / Calendar — forward emails to Motion tasks and Outlook events
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/path/to/EmailToMotion
+ExecStart=email-to-motion --loop --interval 30
+
+# Automatically restart if the process crashes
+Restart=on-failure
+RestartSec=30
+
+# Load credentials from the .env file in the project directory
+EnvironmentFile=/path/to/EmailToMotion/.env
+
+# Log to journald — view with: journalctl -u email-to-motion -f
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
