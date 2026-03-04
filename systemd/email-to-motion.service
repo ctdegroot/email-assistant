@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=YOUR_USERNAME
+User=ctdegroot
 WorkingDirectory=/path/to/EmailToMotion
 ExecStart=email-to-motion --loop --interval 30
 
