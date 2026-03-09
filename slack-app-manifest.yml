@@ -1,0 +1,60 @@
+# Slack App Manifest for EmailToMotion
+#
+# How to apply this manifest:
+#   1. Go to api.slack.com/apps → your app → App Manifest
+#   2. Paste or upload this file and click "Save Changes"
+#   3. Review and accept any permission changes
+#   4. Go to OAuth & Permissions → Reinstall to Workspace
+#
+# This manifest is the single source of truth for the app's configuration.
+# Keep it in version control alongside the code.
+
+display_information:
+  name: EmailToMotion
+  description: >
+    Converts forwarded emails into Motion tasks and Outlook calendar events.
+    Supports message shortcuts and the /availability slash command.
+
+features:
+
+  bot_user:
+    display_name: EmailToMotion
+    always_online: false
+
+  slash_commands:
+    - command: /availability
+      description: Check your calendar availability for a date range
+      usage_hint: "Mar 10-14  [duration_minutes]"
+      should_escape: false
+
+  shortcuts:
+    - name: Create Task
+      type: message
+      callback_id: create_task
+      description: Create a Motion task from this message
+
+    - name: Create Calendar Event
+      type: message
+      callback_id: create_calendar_event
+      description: Create a calendar event from this message
+
+oauth_config:
+  scopes:
+    bot:
+      - commands            # Register and respond to slash commands
+      - channels:history    # Read message history in public channels
+      - channels:read       # List channels (for channel name → ID lookup)
+      - groups:history      # Read message history in private channels
+      - im:history          # Read message history in DMs
+      - mpim:history        # Read message history in group DMs
+      - chat:write          # Post messages and ephemeral replies
+      - reactions:write     # Mark processed messages with ✅
+      - files:read          # Download email attachment content
+      - im:write            # Open DMs (fallback when bot is not in a channel)
+
+settings:
+  interactivity:
+    is_enabled: true        # Required for message shortcuts
+  org_deploy_enabled: false
+  socket_mode_enabled: true # Slash commands and shortcuts use Socket Mode
+  token_rotation_enabled: false

@@ -34,6 +34,12 @@ For emails with clearly separate actions (e.g. "make a rubric" and "grade the ex
 2. Forward it to your *"Forward to Calendar"* contact (the `#email-to-calendar` address).
 3. A `.ics` invite lands in your inbox. Open it in Outlook to add the event to your calendar.
 
+### Creating a task or event from any Slack message
+
+Right-click (or long-press) any message in Slack → **More message shortcuts** → choose **Create Task** or **Create Calendar Event**. The message text is passed through the same Claude extraction pipeline as forwarded emails. A confirmation appears as an ephemeral message visible only to you.
+
+This works on any message — including messages from colleagues, copied snippets, or anything you've already pasted into Slack — not just forwarded emails.
+
 ### Checking your availability
 
 Use the `/availability` Slack slash command to query your calendar and get an email-ready reply listing your free slots:
@@ -128,6 +134,27 @@ Forward a test email to each channel and confirm a task appears in Motion and a 
 | `SMTP_PASSWORD` | Gmail App Password (myaccount.google.com → Security → App passwords) |
 | `CALENDAR_EMAIL` | The address where calendar invites are delivered |
 | `OUTLOOK_ICS_URL` | Secret ICS feed URL from Outlook — required for `/availability` |
+
+---
+
+## Setting up message shortcuts
+
+Message shortcuts ("Create Task" and "Create Calendar Event") are registered in the Slack app manifest and handled over the same Socket Mode connection as `/availability`.
+
+### 1. Apply the app manifest
+
+The easiest way to configure all shortcuts, slash commands, permissions, and Socket Mode settings at once is to use the provided manifest file:
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → your app → **App Manifest**
+2. Switch to **YAML** view and paste the contents of `slack-app-manifest.yml` from this repo (or upload the file)
+3. Click **Save Changes**, review the permission diff, and confirm
+4. Go to **OAuth & Permissions** → **Reinstall to Workspace**
+
+This grants the `im:write` scope needed for the DM fallback (used when you trigger a shortcut in a channel the bot hasn't joined).
+
+### 2. Using the shortcuts
+
+Right-click any Slack message → **More message shortcuts** → select **Create Task** or **Create Calendar Event**. The confirmation appears as an ephemeral message (visible only to you) in the same channel.
 
 ---
 
@@ -280,9 +307,11 @@ EmailToMotion/
 │   ├── tasks.py            # Task extraction (Claude + Motion API) and pipeline
 │   ├── events.py           # Event extraction (Claude + ICS + SMTP) and pipeline
 │   ├── availability.py     # /availability command: ICS fetch, free slot logic, Claude reply
-│   ├── socket_listener.py  # Slack Socket Mode client and slash command dispatch
+│   ├── shortcuts.py        # Message shortcut handlers (Create Task, Create Calendar Event)
+│   ├── socket_listener.py  # Slack Socket Mode client — routes slash commands and shortcuts
 │   ├── cli.py              # Argument parsing and main loop
 │   └── __main__.py         # Enables `python -m email_to_motion`
+├── slack-app-manifest.yml   # Complete Slack app config — apply via App Manifest UI
 ├── systemd/
 │   └── email-to-motion.service   # systemd unit file for Linux server deployment
 ├── scripts/

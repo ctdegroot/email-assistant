@@ -2,13 +2,16 @@
 socket_listener.py — Slack Socket Mode listener.
 
 Maintains a persistent WebSocket connection to Slack so the app can receive
-slash command invocations in real time, without exposing a public HTTP endpoint.
+slash command invocations, message shortcuts, and modal submissions in real
+time, without exposing a public HTTP endpoint.
 
 connect() is non-blocking: the WebSocket runs in SDK-managed background threads,
 so this integrates cleanly with the existing synchronous polling loop.
 
-Currently registered commands:
-  /availability <date range>   — check calendar availability
+Currently registered:
+  /availability <date range> [minutes]  — check calendar availability
+  "Create Task" message shortcut        — open modal → create Motion task
+  "Create Calendar Event" shortcut      — open modal → send calendar invite
 """
 
 import threading
@@ -17,38 +20,70 @@ from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
 from . import config
 from .availability import handle_availability_command
+from . import shortcuts
 
 
 def _dispatch(client: SocketModeClient, req: SocketModeRequest):
     """Route incoming Socket Mode requests to the appropriate handler."""
-    if req.type != "slash_commands":
-        return
-
-    # Acknowledge immediately — Slack requires a response within 3 seconds
+    # Always acknowledge immediately — Slack requires a response within 3 seconds
+    # for ALL request types, not just the ones we handle.
     client.send_socket_mode_response(SocketModeResponse(envelope_id=req.envelope_id))
 
-    payload    = req.payload
-    command    = payload.get("command", "")
-    text       = payload.get("text", "").strip()
-    channel_id = payload.get("channel_id", "")
+    # ── Slash commands ────────────────────────────────────────────────────────
+    if req.type == "slash_commands":
+        payload    = req.payload
+        command    = payload.get("command", "")
+        text       = payload.get("text", "").strip()
+        channel_id = payload.get("channel_id", "")
 
-    if command == "/availability":
-        if not text:
-            config.slack.chat_postMessage(
-                channel=channel_id,
-                text=(
-                    "Usage: `/availability Mar 1-15` "
-                    "or `/availability March 1 to March 15`"
-                ),
-            )
-            return
-        # Spawn a thread so the heavy work (ICS fetch + Claude) doesn't block
-        # the Socket Mode listener, which handles all WebSocket traffic
-        threading.Thread(
-            target=handle_availability_command,
-            args=(text, channel_id),
-            daemon=True,
-        ).start()
+        if command == "/availability":
+            if not text:
+                config.slack.chat_postMessage(
+                    channel=channel_id,
+                    text=(
+                        "Usage: `/availability Mar 1-15` "
+                        "or `/availability March 1 to March 15`\n"
+                        "Optionally append a meeting duration in minutes: "
+                        "`/availability Mar 1-15 60`"
+                    ),
+                )
+                return
+            threading.Thread(
+                target=handle_availability_command,
+                args=(text, channel_id),
+                daemon=True,
+            ).start()
+
+    # ── Interactive payloads (shortcuts and modal submissions) ────────────────
+    elif req.type == "interactive":
+        payload      = req.payload
+        payload_type = payload.get("type")
+
+        # Message shortcuts — open a modal immediately.
+        # IMPORTANT: views.open must be called within 3 seconds of the trigger,
+        # so we call the modal opener directly here (not in a spawned thread).
+        if payload_type == "message_action":
+            callback_id = payload.get("callback_id", "")
+            if callback_id == "create_task":
+                shortcuts.open_create_task_modal(payload)
+            elif callback_id == "create_calendar_event":
+                shortcuts.open_create_event_modal(payload)
+
+        # Modal submissions — the heavy work (Claude + APIs) runs in a thread.
+        elif payload_type == "view_submission":
+            callback_id = payload.get("view", {}).get("callback_id", "")
+            if callback_id == "create_task_submit":
+                threading.Thread(
+                    target=shortcuts.handle_create_task_submit,
+                    args=(payload,),
+                    daemon=True,
+                ).start()
+            elif callback_id == "create_calendar_event_submit":
+                threading.Thread(
+                    target=shortcuts.handle_create_event_submit,
+                    args=(payload,),
+                    daemon=True,
+                ).start()
 
 
 def start(app_token: str) -> SocketModeClient:
@@ -64,5 +99,8 @@ def start(app_token: str) -> SocketModeClient:
     )
     client.socket_mode_request_listeners.append(_dispatch)
     client.connect()
-    print("🔌  Socket Mode connected — /availability command is active.")
+    print(
+        "🔌  Socket Mode connected — "
+        "/availability, Create Task, and Create Calendar Event are active."
+    )
     return client
