@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=ctdegroot
-WorkingDirectory=/path/to/EmailToMotion
+WorkingDirectory=/opt/
 ExecStart=email-to-motion --loop --interval 30
 
 # Automatically restart if the process crashes

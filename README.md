@@ -34,6 +34,20 @@ For emails with clearly separate actions (e.g. "make a rubric" and "grade the ex
 2. Forward it to your *"Forward to Calendar"* contact (the `#email-to-calendar` address).
 3. A `.ics` invite lands in your inbox. Open it in Outlook to add the event to your calendar.
 
+### Checking your availability
+
+Use the `/availability` Slack slash command to query your calendar and get an email-ready reply listing your free slots:
+
+```
+/availability Mar 10-14
+/availability March 10 to March 14
+/availability Mar 10 - Mar 15
+```
+
+Claude reads your Outlook ICS feed, computes free slots (9 am – 5 pm, Monday – Friday, Toronto time), and posts a polished, email-ready availability message directly in Slack.
+
+---
+
 ### Running manually
 ```bash
 cd ~/path/to/EmailToMotion
@@ -106,12 +120,73 @@ Forward a test email to each channel and confirm a task appears in Motion and a 
 | `SLACK_BOT_TOKEN` | Bot User OAuth Token from api.slack.com/apps → OAuth & Permissions |
 | `SLACK_MOTION_CHANNEL` | Slack channel name for tasks (default: `email-to-motion`) |
 | `SLACK_CALENDAR_CHANNEL` | Slack channel name for calendar events (default: `email-to-calendar`) |
+| `SLACK_APP_TOKEN` | App-level token (`xapp-…`) for Socket Mode — required for `/availability` |
 | `MOTION_API_KEY` | From usemotion.com → Settings → API |
 | `MOTION_WORKSPACE_ID` | Run `python -m email_to_motion --workspaces` to find this |
 | `ANTHROPIC_API_KEY` | From console.anthropic.com/settings/keys |
 | `SMTP_USER` | Gmail address used to send calendar invites |
 | `SMTP_PASSWORD` | Gmail App Password (myaccount.google.com → Security → App passwords) |
 | `CALENDAR_EMAIL` | The address where calendar invites are delivered |
+| `OUTLOOK_ICS_URL` | Secret ICS feed URL from Outlook — required for `/availability` |
+
+---
+
+## Setting up /availability
+
+### 1. Enable Socket Mode in your Slack app
+
+Go to [api.slack.com/apps](https://api.slack.com/apps) → your app → **Socket Mode** → enable it.
+
+### 2. Create a slash command
+
+Go to **Slash Commands** → **Create New Command**:
+
+| Field | Value |
+|---|---|
+| Command | `/availability` |
+| Request URL | `https://example.com` *(anything — Socket Mode ignores this)* |
+| Short Description | Check calendar availability |
+| Usage Hint | `Mar 10-14` |
+
+### 3. Generate an App-Level Token
+
+Go to **Basic Information** → **App-Level Tokens** → **Generate Token and Scopes**:
+- Name it anything (e.g. `socket-mode`)
+- Add the `connections:write` scope
+- Copy the `xapp-…` token
+
+Add it to `.env`:
+
+```
+SLACK_APP_TOKEN=xapp-1-...
+```
+
+### 4. Get your Outlook ICS feed URL
+
+In Outlook Web (outlook.office.com):
+1. **Settings** (⚙️) → **Calendar** → **Shared calendars**
+2. Under **Publish a calendar**, choose your calendar and select **Can view all details**
+3. Click **Publish**, then copy the **ICS** link
+
+Add it to `.env`:
+
+```
+OUTLOOK_ICS_URL=https://outlook.office365.com/owa/calendar/...
+```
+
+### 5. Install new dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+The two new packages are `recurring-ical-events` (for expanding recurring events) and `websocket-client` (required by Slack's Socket Mode SDK).
+
+### 6. Reinstall the bot in your workspace
+
+Any time you add a new slash command, Slack requires you to reinstall the app:
+
+Go to **OAuth & Permissions** → **Reinstall to Workspace**.
 
 ---
 
@@ -200,18 +275,20 @@ chris ALL=(ALL) NOPASSWD: /bin/systemctl restart email-to-motion
 ```
 EmailToMotion/
 ├── email_to_motion/
-│   ├── config.py          # Environment variables and shared client initialisation
-│   ├── slack_helpers.py   # Channel monitoring, message extraction, emoji marking
-│   ├── tasks.py           # Task extraction (Claude + Motion API) and pipeline
-│   ├── events.py          # Event extraction (Claude + ICS + SMTP) and pipeline
-│   ├── cli.py             # Argument parsing and main loop
-│   └── __main__.py        # Enables `python -m email_to_motion`
+│   ├── config.py           # Environment variables and shared client initialisation
+│   ├── slack_helpers.py    # Channel monitoring, message extraction, emoji marking
+│   ├── tasks.py            # Task extraction (Claude + Motion API) and pipeline
+│   ├── events.py           # Event extraction (Claude + ICS + SMTP) and pipeline
+│   ├── availability.py     # /availability command: ICS fetch, free slot logic, Claude reply
+│   ├── socket_listener.py  # Slack Socket Mode client and slash command dispatch
+│   ├── cli.py              # Argument parsing and main loop
+│   └── __main__.py         # Enables `python -m email_to_motion`
 ├── systemd/
 │   └── email-to-motion.service   # systemd unit file for Linux server deployment
 ├── scripts/
-│   └── update.sh          # Pull latest code and restart the service
-├── pyproject.toml          # Package definition — enables `pip install -e .`
+│   └── update.sh           # Pull latest code and restart the service
+├── pyproject.toml           # Package definition — enables `pip install -e .`
 ├── requirements.txt
 ├── .env.example
-├── .env                   # Your credentials — never commit this
+├── .env                    # Your credentials — never commit this
 ```

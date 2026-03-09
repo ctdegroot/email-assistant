@@ -11,6 +11,7 @@ import time
 from . import config
 from .tasks import get_workspaces, process_channel
 from .events import process_calendar_channel
+from . import socket_listener
 
 
 def main():
@@ -52,6 +53,13 @@ def main():
 
     config.validate()
     config.init_clients()
+
+    # Start Socket Mode listener for slash commands (e.g. /availability).
+    # Requires SLACK_APP_TOKEN (xapp-…) — silently skipped if not configured.
+    if config.SLACK_APP_TOKEN:
+        socket_listener.start(config.SLACK_APP_TOKEN)
+    else:
+        print("ℹ️   SLACK_APP_TOKEN not set — slash commands disabled.")
 
     run_tasks    = not args.calendar_only
     run_calendar = not args.tasks_only

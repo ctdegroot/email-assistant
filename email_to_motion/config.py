@@ -16,6 +16,7 @@ load_dotenv()
 # ── Environment variables ─────────────────────────────────────────────────────
 
 SLACK_BOT_TOKEN           = os.environ.get("SLACK_BOT_TOKEN", "")
+SLACK_APP_TOKEN           = os.environ.get("SLACK_APP_TOKEN", "")   # xapp-… required for Socket Mode
 SLACK_MOTION_CHANNEL_NAME = os.environ.get("SLACK_MOTION_CHANNEL", "email-to-motion")
 SLACK_CALENDAR_CHANNEL    = os.environ.get("SLACK_CALENDAR_CHANNEL", "email-to-calendar")
 MOTION_API_KEY            = os.environ.get("MOTION_API_KEY", "")
@@ -24,6 +25,7 @@ ANTHROPIC_API_KEY         = os.environ.get("ANTHROPIC_API_KEY", "")
 SMTP_USER                 = os.environ.get("SMTP_USER", "")
 SMTP_PASSWORD             = os.environ.get("SMTP_PASSWORD", "")
 CALENDAR_EMAIL            = os.environ.get("CALENDAR_EMAIL", "")
+OUTLOOK_ICS_URL           = os.environ.get("OUTLOOK_ICS_URL", "")   # secret ICS feed URL
 
 PROCESSED_EMOJI = "white_check_mark"   # ✅ added to handled messages
 
