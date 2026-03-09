@@ -1,13 +1,17 @@
 """
 availability.py — /availability slash command handler.
 
-Pipeline:
+Pipeline (standard):
   1. Parse the date range from the slash command argument.
   2. Fetch the Outlook ICS calendar from OUTLOOK_ICS_URL.
   3. Expand recurring events with recurring_ical_events.
   4. Compute free slots within working hours (9am–4:30pm Mon–Fri, America/Toronto).
   5. Pass the busy/free summary to Claude for a human-readable email reply.
   6. Post the reply back to the Slack channel.
+
+Pipeline (match mode — /availability <range> [duration] match):
+  Steps 1–4 are identical.  Step 5 also receives the other person's pasted
+  availability text and Claude returns only mutually available slots.
 """
 
 import re
@@ -295,7 +299,72 @@ def _ask_claude(summary: str, duration_minutes: int) -> str:
     return response.content[0].text.strip()
 
 
+# ── Match-mode prompts ────────────────────────────────────────────────────────
+
+MATCH_SYSTEM_PROMPT = (
+    "You are a scheduling assistant that finds mutually available meeting times. "
+    "Given the user's free time slots and another person's stated availability, "
+    "identify only the overlapping windows that are long enough for the requested "
+    "meeting duration. "
+    "Produce a plain-text availability block ready to paste into an email. "
+    "Use a bulleted list (a dash '-' for each day). "
+    "Do not include a greeting or sign-off. Do not mention the time zone."
+)
+
+MATCH_PROMPT_TEMPLATE = """\
+I am looking to schedule a {duration}-minute meeting.
+
+MY FREE SLOTS (from my calendar):
+{my_slots}
+
+THEIR AVAILABILITY (as provided by them — interpret it as generously as possible, \
+treating ranges like "afternoons" or "anytime Tuesday" as broadly as stated):
+{their_availability}
+
+Find every window where both sides are available for at least {duration} consecutive \
+minutes. List only the mutually available times. If there are no overlapping slots, \
+say so clearly.
+
+Format the result starting with the line \
+"Based on our availability, the following times work for both of us:" followed by a \
+bulleted list (one bullet per day, skip days with no overlap). End with exactly this \
+closing sentence: \
+"Please let me know what works best for your schedule, and I'll get it on the calendar."
+"""
+
+
+def _ask_claude_match(my_summary: str, their_text: str, duration_minutes: int) -> str:
+    response = config.claude.messages.create(
+        model="claude-sonnet-4-5-20250929",
+        max_tokens=600,
+        system=MATCH_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": MATCH_PROMPT_TEMPLATE.format(
+            my_slots=my_summary,
+            their_availability=their_text,
+            duration=duration_minutes,
+        )}],
+    )
+    return response.content[0].text.strip()
+
+
 # ── Entry point called by the socket listener ─────────────────────────────────
+
+def _parse_availability_args(text: str) -> tuple[str, int]:
+    """
+    Extract the optional trailing integer duration from command text.
+
+    Returns (date_range_text, duration_minutes).
+    Examples:
+      "Mar 10-14"       → ("Mar 10-14", 30)
+      "Mar 10-14 60"    → ("Mar 10-14", 60)
+    """
+    duration_minutes = 30
+    m = re.search(r'\s+(\d+)\s*$', text)
+    if m:
+        duration_minutes = int(m.group(1))
+        text = text[:m.start()].strip()
+    return text, duration_minutes
+
 
 def handle_availability_command(text: str, channel_id: str):
     """
@@ -305,13 +374,7 @@ def handle_availability_command(text: str, channel_id: str):
       /availability Mar 10-14        → 30-minute slots (default)
       /availability Mar 10-14 60     → 60-minute slots
     """
-    # Strip an optional trailing integer duration, e.g. "Mar 10-14 60"
-    duration_minutes = 30
-    m = re.search(r'\s+(\d+)\s*$', text)
-    if m:
-        duration_minutes = int(m.group(1))
-        text = text[:m.start()].strip()
-
+    text, duration_minutes = _parse_availability_args(text)
     min_duration = timedelta(minutes=duration_minutes)
 
     try:
@@ -343,3 +406,119 @@ def handle_availability_command(text: str, channel_id: str):
         return
 
     config.slack.chat_postMessage(channel=channel_id, text=reply)
+
+
+def open_availability_match_modal(trigger_id: str, channel_id: str, user_id: str, date_text: str, duration_minutes: int):
+    """
+    Open a Slack modal so the user can paste the other person's availability.
+    Called directly in _dispatch (not in a thread) because trigger_id expires in 3 s.
+    """
+    import json
+    metadata = json.dumps({
+        "channel_id":       channel_id,
+        "user_id":          user_id,
+        "date_text":        date_text,
+        "duration_minutes": duration_minutes,
+    })
+    config.slack.views_open(
+        trigger_id=trigger_id,
+        view={
+            "type":             "modal",
+            "callback_id":      "availability_match_submit",
+            "private_metadata": metadata,
+            "title":            {"type": "plain_text", "text": "Find Mutual Availability"},
+            "submit":           {"type": "plain_text", "text": "Find Overlap"},
+            "close":            {"type": "plain_text", "text": "Cancel"},
+            "blocks": [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f"*Date range:* {date_text}    "
+                            f"*Duration:* {duration_minutes} min\n\n"
+                            "Paste the other person's availability below. "
+                            "Any format works — a paragraph, a list, or a forwarded email excerpt."
+                        ),
+                    },
+                },
+                {"type": "divider"},
+                {
+                    "type":    "input",
+                    "block_id": "their_avail_block",
+                    "label":   {"type": "plain_text", "text": "Their availability"},
+                    "element": {
+                        "type":            "plain_text_input",
+                        "action_id":       "their_avail_input",
+                        "multiline":       True,
+                        "placeholder":     {
+                            "type": "plain_text",
+                            "text": "e.g. I'm free Mon–Wed mornings and Thursday after 2pm",
+                        },
+                    },
+                },
+            ],
+        },
+    )
+
+
+def handle_availability_match_submit(payload: dict):
+    """
+    Modal submission handler for availability_match_submit.
+    Fetches MY calendar, cross-checks against their pasted text, posts result.
+    """
+    import json
+    view     = payload["view"]
+    metadata = json.loads(view["private_metadata"])
+    channel_id       = metadata["channel_id"]
+    user_id          = metadata.get("user_id", channel_id)
+    date_text        = metadata["date_text"]
+    duration_minutes = metadata["duration_minutes"]
+
+    def _post(text: str):
+        """Post to the originating channel, falling back to the user's DM."""
+        try:
+            config.slack.chat_postMessage(channel=channel_id, text=text)
+        except Exception:
+            config.slack.chat_postMessage(channel=user_id, text=text)
+
+    their_text = (
+        view["state"]["values"]
+            ["their_avail_block"]
+            ["their_avail_input"]
+            ["value"] or ""
+    ).strip()
+
+    if not their_text:
+        # Nothing was typed — fall back to standard availability output
+        handle_availability_command(date_text, channel_id)
+        return
+
+    min_duration = timedelta(minutes=duration_minutes)
+
+    try:
+        start, end = parse_date_range(date_text)
+    except ValueError as e:
+        _post(f"⚠️ {e}")
+        return
+
+    _post(
+        f"_Finding mutual availability {start.strftime('%b %-d')}–{end.strftime('%b %-d')}"
+        f" ({duration_minutes} min)…_"
+    )
+
+    try:
+        busy = fetch_busy_blocks(start, end)
+    except Exception as e:
+        _post(f"⚠️ Could not fetch calendar: {e}")
+        return
+
+    my_summary = _build_summary(busy, min_duration=min_duration)
+
+    try:
+        reply = _ask_claude_match(my_summary, their_text, duration_minutes)
+    except Exception as e:
+        _post(f"⚠️ Claude error: {e}")
+        return
+
+    _post(reply)

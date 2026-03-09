@@ -14,12 +14,18 @@ Currently registered:
   "Create Calendar Event" shortcut      — open modal → send calendar invite
 """
 
+import re
 import threading
 from slack_sdk.socket_mode import SocketModeClient
 from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
 from . import config
-from .availability import handle_availability_command
+from .availability import (
+    handle_availability_command,
+    open_availability_match_modal,
+    handle_availability_match_submit,
+    _parse_availability_args,
+)
 from . import shortcuts
 
 
@@ -64,15 +70,27 @@ def _dispatch(client: SocketModeClient, req: SocketModeRequest):
                         "Usage: `/availability Mar 1-15` "
                         "or `/availability March 1 to March 15`\n"
                         "Optionally append a meeting duration in minutes: "
-                        "`/availability Mar 1-15 60`"
+                        "`/availability Mar 1-15 60`\n"
+                        "To cross-check against someone else's availability, "
+                        "append `match`: `/availability Mar 1-15 60 match`"
                     ),
                 )
                 return
-            threading.Thread(
-                target=handle_availability_command,
-                args=(text, channel_id),
-                daemon=True,
-            ).start()
+
+            # Detect "match" keyword anywhere in the text (case-insensitive)
+            match_mode = bool(re.search(r'\bmatch\b', text, re.IGNORECASE))
+            if match_mode:
+                clean_text = re.sub(r'\s*\bmatch\b\s*', ' ', text, flags=re.IGNORECASE).strip()
+                date_text, duration_minutes = _parse_availability_args(clean_text)
+                # Must open modal in this thread — trigger_id expires in 3 s
+                trigger_id = payload.get("trigger_id", "")
+                open_availability_match_modal(trigger_id, channel_id, user_id, date_text, duration_minutes)
+            else:
+                threading.Thread(
+                    target=handle_availability_command,
+                    args=(text, channel_id),
+                    daemon=True,
+                ).start()
 
     # ── Interactive payloads (shortcuts and modal submissions) ────────────────
     elif req.type == "interactive":
@@ -107,6 +125,12 @@ def _dispatch(client: SocketModeClient, req: SocketModeRequest):
             elif callback_id == "create_calendar_event_submit":
                 threading.Thread(
                     target=shortcuts.handle_create_event_submit,
+                    args=(payload,),
+                    daemon=True,
+                ).start()
+            elif callback_id == "availability_match_submit":
+                threading.Thread(
+                    target=handle_availability_match_submit,
                     args=(payload,),
                     daemon=True,
                 ).start()

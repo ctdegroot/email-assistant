@@ -24,7 +24,7 @@ features:
   slash_commands:
     - command: /availability
       description: Check your calendar availability for a date range
-      usage_hint: "Mar 10-14  [duration_minutes]"
+      usage_hint: "Mar 10-14 [duration_minutes] [match]"
       should_escape: false
 
   shortcuts:
