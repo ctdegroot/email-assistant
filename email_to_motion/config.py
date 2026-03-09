@@ -27,6 +27,10 @@ SMTP_PASSWORD             = os.environ.get("SMTP_PASSWORD", "")
 CALENDAR_EMAIL            = os.environ.get("CALENDAR_EMAIL", "")
 OUTLOOK_ICS_URL           = os.environ.get("OUTLOOK_ICS_URL", "")   # secret ICS feed URL
 
+# The Slack user ID of the only person allowed to use slash commands and shortcuts.
+# Find yours at slack.com/account/settings (Profile → ··· → Copy member ID).
+ALLOWED_SLACK_USER_ID     = os.environ.get("ALLOWED_SLACK_USER_ID", "")
+
 PROCESSED_EMOJI = "white_check_mark"   # ✅ added to handled messages
 
 # ── Shared clients (set by init_clients()) ────────────────────────────────────

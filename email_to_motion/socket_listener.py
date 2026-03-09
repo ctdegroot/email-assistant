@@ -23,6 +23,21 @@ from .availability import handle_availability_command
 from . import shortcuts
 
 
+def _is_authorized(user_id: str) -> bool:
+    """Return True if the user is allowed to use this app's commands and shortcuts."""
+    allowed = config.ALLOWED_SLACK_USER_ID
+    return not allowed or user_id == allowed
+
+
+def _deny(channel_id: str, user_id: str):
+    """Post an ephemeral 'not authorized' message, falling back to a DM."""
+    msg = "⛔ Sorry, this command is only available to the app owner."
+    try:
+        config.slack.chat_postEphemeral(channel=channel_id, user=user_id, text=msg)
+    except Exception:
+        config.slack.chat_postMessage(channel=user_id, text=msg)
+
+
 def _dispatch(client: SocketModeClient, req: SocketModeRequest):
     """Route incoming Socket Mode requests to the appropriate handler."""
     # Always acknowledge immediately — Slack requires a response within 3 seconds
@@ -35,6 +50,11 @@ def _dispatch(client: SocketModeClient, req: SocketModeRequest):
         command    = payload.get("command", "")
         text       = payload.get("text", "").strip()
         channel_id = payload.get("channel_id", "")
+        user_id    = payload.get("user_id", "")
+
+        if not _is_authorized(user_id):
+            _deny(channel_id, user_id)
+            return
 
         if command == "/availability":
             if not text:
@@ -58,6 +78,12 @@ def _dispatch(client: SocketModeClient, req: SocketModeRequest):
     elif req.type == "interactive":
         payload      = req.payload
         payload_type = payload.get("type")
+        user_id      = payload.get("user", {}).get("id", "")
+        channel_id   = (payload.get("channel") or {}).get("id", user_id)  # fallback to DM
+
+        if not _is_authorized(user_id):
+            _deny(channel_id, user_id)
+            return
 
         # Message shortcuts — open a modal immediately.
         # IMPORTANT: views.open must be called within 3 seconds of the trigger,
