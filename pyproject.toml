@@ -16,6 +16,7 @@ dependencies = [
     "pytz",
     "recurring-ical-events",
     "websocket-client",
+    "schedule",
 ]
 
 [project.scripts]

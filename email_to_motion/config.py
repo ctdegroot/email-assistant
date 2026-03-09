@@ -27,9 +27,16 @@ SMTP_PASSWORD             = os.environ.get("SMTP_PASSWORD", "")
 CALENDAR_EMAIL            = os.environ.get("CALENDAR_EMAIL", "")
 OUTLOOK_ICS_URL           = os.environ.get("OUTLOOK_ICS_URL", "")   # secret ICS feed URL
 
+# Your Outlook/university email address — used to filter yourself out of attendee lists.
+# This is likely different from SMTP_USER (your Gmail). If not set, falls back to SMTP_USER.
+CALENDAR_OWNER_EMAIL      = os.environ.get("CALENDAR_OWNER_EMAIL", "")
+
 # The Slack user ID of the only person allowed to use slash commands and shortcuts.
 # Find yours at slack.com/account/settings (Profile → ··· → Copy member ID).
 ALLOWED_SLACK_USER_ID     = os.environ.get("ALLOWED_SLACK_USER_ID", "")
+
+# Channel to post conflict alerts to. Defaults to SLACK_MOTION_CHANNEL if not set.
+SLACK_CONFLICT_CHANNEL    = os.environ.get("SLACK_CONFLICT_CHANNEL", "")
 
 PROCESSED_EMOJI = "white_check_mark"   # ✅ added to handled messages
 

@@ -27,6 +27,7 @@ from .availability import (
     _parse_availability_args,
 )
 from . import shortcuts
+from . import conflict_checker
 
 
 def _is_authorized(user_id: str) -> bool:
@@ -62,7 +63,31 @@ def _dispatch(client: SocketModeClient, req: SocketModeRequest):
             _deny(channel_id, user_id)
             return
 
-        if command == "/availability":
+        if command == "/conflict-check":
+            if "debug" in text.lower():
+                config.slack.chat_postMessage(
+                    channel=channel_id,
+                    text="_Fetching this week's events from ICS feed…_",
+                )
+                threading.Thread(
+                    target=conflict_checker.debug_events,
+                    args=(channel_id,),
+                    daemon=True,
+                ).start()
+            else:
+                force = "force" in text.lower()
+                config.slack.chat_postMessage(
+                    channel=channel_id,
+                    text="_Checking for conflicts this week…_",
+                )
+                threading.Thread(
+                    target=conflict_checker.run_morning_check,
+                    args=(channel_id,),
+                    kwargs={"verbose": True, "force": force},
+                    daemon=True,
+                ).start()
+
+        elif command == "/availability":
             if not text:
                 config.slack.chat_postMessage(
                     channel=channel_id,
@@ -103,6 +128,16 @@ def _dispatch(client: SocketModeClient, req: SocketModeRequest):
             _deny(channel_id, user_id)
             return
 
+        # Button clicks in messages (conflict alerts, etc.)
+        # trigger_id is present, so modals can be opened directly here.
+        if payload_type == "block_actions":
+            for action in payload.get("actions", []):
+                action_id = action.get("action_id", "")
+                if action_id == "resolve_conflict":
+                    conflict_checker.open_resolve_modal(payload, action)
+                elif action_id == "ignore_conflict":
+                    conflict_checker.handle_ignore(payload)
+
         # Message shortcuts — open a modal immediately.
         # IMPORTANT: views.open must be called within 3 seconds of the trigger,
         # so we call the modal opener directly here (not in a spawned thread).
@@ -131,6 +166,12 @@ def _dispatch(client: SocketModeClient, req: SocketModeRequest):
             elif callback_id == "availability_match_submit":
                 threading.Thread(
                     target=handle_availability_match_submit,
+                    args=(payload,),
+                    daemon=True,
+                ).start()
+            elif callback_id == "resolve_conflict_submit":
+                threading.Thread(
+                    target=conflict_checker.handle_resolve_submit,
                     args=(payload,),
                     daemon=True,
                 ).start()

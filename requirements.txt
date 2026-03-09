@@ -6,3 +6,4 @@ icalendar
 pytz
 recurring-ical-events
 websocket-client
+schedule

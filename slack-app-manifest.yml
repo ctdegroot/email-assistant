@@ -27,6 +27,11 @@ features:
       usage_hint: "Mar 10-14 [duration_minutes] [match]"
       should_escape: false
 
+    - command: /conflict-check
+      description: Check for calendar conflicts this week
+      usage_hint: "[force | debug]"
+      should_escape: false
+
   shortcuts:
     - name: Create Task
       type: message

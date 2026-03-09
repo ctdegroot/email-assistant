@@ -12,6 +12,7 @@ from . import config
 from .tasks import get_workspaces, process_channel
 from .events import process_calendar_channel
 from . import socket_listener
+from . import scheduler
 
 
 def main():
@@ -54,12 +55,13 @@ def main():
     config.validate()
     config.init_clients()
 
-    # Start Socket Mode listener for slash commands (e.g. /availability).
+    # Start Socket Mode listener for slash commands and shortcuts.
     # Requires SLACK_APP_TOKEN (xapp-…) — silently skipped if not configured.
     if config.SLACK_APP_TOKEN:
         socket_listener.start(config.SLACK_APP_TOKEN)
+        scheduler.start()
     else:
-        print("ℹ️   SLACK_APP_TOKEN not set — slash commands disabled.")
+        print("ℹ️   SLACK_APP_TOKEN not set — slash commands and scheduler disabled.")
 
     run_tasks    = not args.calendar_only
     run_calendar = not args.tasks_only
