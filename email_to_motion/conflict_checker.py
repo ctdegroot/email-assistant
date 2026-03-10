@@ -522,38 +522,69 @@ def _build_rescheduling_availability(event_to_move: dict) -> str:
     Compute free slots for the rest of this week, treating the event being
     moved as already cancelled (so its slot appears free).
 
+    Same-day logic:
+      - Before noon  → suggest afternoon slots at least 3 hours from now
+                       (gives people time to respond before the slot arrives).
+      - After noon   → skip today entirely; start from the next working day.
+
     If today is Thursday or Friday, also includes Monday–Tuesday of next week
     as a fallback range, clearly labelled.
     """
-    today   = date.today()
-    weekday = today.weekday()   # 0=Mon … 4=Fri
-    friday  = today + timedelta(days=(4 - weekday))
+    now_toronto = datetime.now(TORONTO_TZ)
+    today       = now_toronto.date()
+    weekday     = today.weekday()   # 0=Mon … 4=Fri
+    friday      = today + timedelta(days=(4 - weekday))
+
+    # Earliest date we're willing to offer slots on
+    if now_toronto.hour >= 12:
+        # After noon — skip today; find the next weekday
+        avail_start = today + timedelta(days=1)
+        while avail_start.weekday() >= 5:   # skip Sat/Sun
+            avail_start += timedelta(days=1)
+    else:
+        avail_start = today
 
     # The event being moved frees up its own time slot
     ev_start = datetime.fromisoformat(event_to_move["start"])
     ev_end   = datetime.fromisoformat(event_to_move["end"])
 
     def _avail_for_range(start: date, end: date) -> str:
+        if start > end:
+            return "  (no remaining slots in this range)"
         try:
             busy = fetch_busy_blocks(start, end)
         except Exception:
             return "  (could not fetch calendar)"
-        # Remove the event being rescheduled from busy blocks
+
+        # Remove the event being rescheduled (its slot is now free)
         for d in busy:
             busy[d] = [
                 (bs, be) for (bs, be) in busy[d]
                 if not (bs >= ev_start and be <= ev_end)
             ]
+
+        # Before-noon case: block out everything before now + 3 hours on today
+        if start == today and today in busy:
+            cutoff  = now_toronto + timedelta(hours=3)
+            day_ws  = TORONTO_TZ.localize(datetime.combine(today, WORK_START))
+            if cutoff > day_ws:
+                busy[today] = [(day_ws, cutoff)] + busy[today]
+
         return _build_summary(busy, min_duration=timedelta(minutes=30))
 
-    parts = [f"This week:\n{_avail_for_range(today, friday)}"]
+    parts = []
+    if avail_start <= friday:
+        parts.append(f"This week:\n{_avail_for_range(avail_start, friday)}")
 
     if weekday >= 3:   # Thursday or Friday → offer early next week too
         next_mon = friday + timedelta(days=3)
         next_tue = next_mon + timedelta(days=1)
-        parts.append(f"Early next week (if this week doesn't work):\n{_avail_for_range(next_mon, next_tue)}")
+        parts.append(
+            f"Early next week (if this week doesn't work):\n"
+            f"{_avail_for_range(next_mon, next_tue)}"
+        )
 
-    return "\n\n".join(parts)
+    return "\n\n".join(parts) if parts else "  (no available slots found)"
 
 
 # ── Email draft generation ────────────────────────────────────────────────────
