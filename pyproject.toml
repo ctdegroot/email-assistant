@@ -21,3 +21,10 @@ dependencies = [
 
 [project.scripts]
 email-to-motion = "email_to_motion.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
