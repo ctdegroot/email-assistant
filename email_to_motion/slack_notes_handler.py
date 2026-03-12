@@ -19,6 +19,8 @@ Stage 2 (future): also push to Obsidian vault via Git.
 """
 
 import io
+import json
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +31,8 @@ from . import config
 from . import note_generator
 from . import vault_writer
 from .slack_helpers import get_channel_id, get_unprocessed_messages, mark_processed
+
+log = logging.getLogger(__name__)
 
 
 # ── Channel ID resolution ─────────────────────────────────────────────────────
@@ -107,6 +111,26 @@ _BY_FILETYPE = {
     "docx": _extract_docx,
 }
 
+# Reverse map: MIME → short filetype string (used when normalising email attachments)
+_MIME_TO_FT: dict[str, str] = {v: k for k, v in {
+    "pdf":  "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}.items()}
+
+
+def _mime_to_filetype(mime: str) -> str:
+    """Return a short filetype string for a MIME type, or derive one from the subtype."""
+    if mime in _MIME_TO_FT:
+        return _MIME_TO_FT[mime]
+    # Fallback: take the part after '/' and strip vendor prefixes
+    # e.g. "image/jpeg" → "jpeg", "application/vnd.ms-excel" → "ms-excel"
+    _, _, subtype = mime.partition("/")
+    subtype = subtype.split(";")[0].strip()
+    for prefix in ("vnd.", "x-"):
+        if subtype.startswith(prefix):
+            subtype = subtype[len(prefix):]
+    return subtype or ""
+
 
 # ── Forwarded email unwrapping ────────────────────────────────────────────────
 
@@ -179,6 +203,40 @@ def _extract_email_content(files: list[dict]) -> tuple[str, str, str, list[dict]
             frm     = (f.get("from") or [{}])
             sender  = frm[0].get("original") or frm[0].get("address") or "Unknown"
             body    = f.get("plain_text") or ""
+
+            # Attachments from the original email can appear in two places
+            # depending on the Slack API version / email type:
+            #
+            # 1. f["files"]       — regular Slack file objects (same shape as
+            #                       top-level event files; used in some integrations)
+            # 2. f["attachments"] — Slack's email-attachment objects, which use
+            #                       slightly different field names and must be
+            #                       normalised before the downloader can use them.
+            for embedded in (f.get("files") or []):
+                attachment_files.append(embedded)
+
+            for att in (f.get("attachments") or []):
+                # Email attachment objects have url_private / url_private_download
+                # directly, but use 'filename' (not 'name') for the file name and
+                # may omit 'filetype' (using 'mimetype' instead).
+                # Field priority confirmed from live Slack payloads:
+                #   filename > name > title
+                name = (att.get("filename") or att.get("name") or att.get("title") or "attachment")
+                mime = att.get("mimetype") or ""
+                # Derive a short filetype string from the MIME type if absent
+                ft_short = att.get("filetype") or _mime_to_filetype(mime)
+                dl_url   = (att.get("url_private_download")
+                            or att.get("url_private")
+                            or att.get("url")
+                            or "")
+                if dl_url or mime:
+                    attachment_files.append({
+                        "name":                 name,
+                        "mimetype":             mime,
+                        "filetype":             ft_short,
+                        "url_private_download": dl_url,
+                        "url_private":          dl_url,
+                    })
         else:
             attachment_files.append(f)
 
@@ -242,6 +300,20 @@ def process_message(event: dict):
 
     channel_id = event.get("channel", "")
     files      = event.get("files") or []
+
+    # ── Log a brief summary; set LOG_LEVEL=DEBUG for the full file-object dump ──
+    if files:
+        for i, f in enumerate(files):
+            ft = f.get("filetype", "?")
+            atts = f.get("attachments") or [] if ft == "email" else []
+            att_names = [a.get("filename") or a.get("name") or "?" for a in atts]
+            log.info("notes file[%d]: filetype=%r  attachments=%s",
+                     i, ft, att_names or "(none)")
+            if ft == "email":
+                safe = {k: v for k, v in f.items() if k not in ("plain_text", "preview_plain_text")}
+                log.debug("  email file[%d] full object: %s", i, json.dumps(safe, default=str))
+    else:
+        log.info("notes event: no files attached")
 
     # Extract email content from Slack's email file structure
     subject, sender, body, attachment_files = _extract_email_content(files)

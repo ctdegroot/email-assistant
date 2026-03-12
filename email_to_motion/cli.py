@@ -6,6 +6,8 @@ either once or on a repeating interval.
 """
 
 import argparse
+import logging
+import os
 import sys
 import time
 from . import config
@@ -16,7 +18,19 @@ from . import scheduler
 from . import slack_notes_handler
 
 
+def _setup_logging():
+    """Configure root logging from LOG_LEVEL env var (default: INFO)."""
+    level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+
 def main():
+    _setup_logging()
     parser = argparse.ArgumentParser(
         description=(
             "Monitor Slack channels for forwarded emails and create "

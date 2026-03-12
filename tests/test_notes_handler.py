@@ -7,6 +7,7 @@ import pytest
 
 from email_to_motion.slack_notes_handler import (
     _extract_email_content,
+    _mime_to_filetype,
     _unwrap_forward,
 )
 
@@ -187,3 +188,134 @@ class TestExtractEmailContent:
         files = [_email_file("Subject", "Alice <a@b.com>", "")]
         _, _, body, _ = _extract_email_content(files)
         assert body == ""
+
+    def test_pdf_embedded_in_email_file_is_extracted(self):
+        """Attachments from the original email live inside the email file's 'files' list."""
+        email = {
+            **_email_file("Agenda - Mar 19 2026", "wedean@uwo.ca", "See attached agenda."),
+            "files": [{"filetype": "pdf", "name": "agenda.pdf", "mimetype": "application/pdf"}],
+        }
+        _, _, _, attachments = _extract_email_content([email])
+        assert len(attachments) == 1
+        assert attachments[0]["name"] == "agenda.pdf"
+
+    def test_multiple_pdfs_embedded_in_email_file(self):
+        email = {
+            **_email_file("Two docs", "sender@example.com", "Body"),
+            "files": [
+                {"filetype": "pdf",  "name": "doc1.pdf"},
+                {"filetype": "docx", "name": "doc2.docx"},
+            ],
+        }
+        _, _, _, attachments = _extract_email_content([email])
+        names = {a["name"] for a in attachments}
+        assert names == {"doc1.pdf", "doc2.docx"}
+
+    def test_embedded_and_direct_attachments_combined(self):
+        """Both embedded (inside email file) and direct top-level attachments are returned."""
+        email = {
+            **_email_file("Subject", "Alice <a@b.com>", "Body"),
+            "files": [{"filetype": "pdf", "name": "embedded.pdf"}],
+        }
+        direct = {"filetype": "pdf", "name": "direct.pdf"}
+        _, _, _, attachments = _extract_email_content([email, direct])
+        names = {a["name"] for a in attachments}
+        assert names == {"embedded.pdf", "direct.pdf"}
+
+    def test_email_file_with_no_files_key_still_works(self):
+        """Email file objects with no 'files' key should not raise."""
+        email = _email_file("Subject", "Alice <a@b.com>", "Body")
+        # _email_file() doesn't add a 'files' key — this should still work fine
+        _, _, _, attachments = _extract_email_content([email])
+        assert attachments == []
+
+    def test_email_file_with_empty_files_list(self):
+        email = {**_email_file("Subject", "Alice <a@b.com>", "Body"), "files": []}
+        _, _, _, attachments = _extract_email_content([email])
+        assert attachments == []
+
+    # ── f["attachments"] path (actual Slack email-attachment format) ────────────
+
+    def test_pdf_in_attachments_field_is_extracted(self):
+        """PDF in f['attachments'] (the real Slack format) is picked up."""
+        email = {
+            **_email_file("Agenda", "wedean@uwo.ca", "See attached."),
+            "attachments": [{
+                "name":                 "FEC-Agenda-Mar19.pdf",
+                "mimetype":             "application/pdf",
+                "url_private_download": "https://files.slack.com/files-pri/xxx/FEC-Agenda-Mar19.pdf",
+                "url_private":          "https://files.slack.com/files-pri/xxx/FEC-Agenda-Mar19.pdf",
+            }],
+        }
+        _, _, _, attachments = _extract_email_content([email])
+        assert len(attachments) == 1
+        assert attachments[0]["name"] == "FEC-Agenda-Mar19.pdf"
+        assert attachments[0]["mimetype"] == "application/pdf"
+        assert attachments[0]["filetype"] == "pdf"
+
+    def test_attachment_uses_filename_field(self):
+        """Slack email attachment objects use 'filename' as the primary name field."""
+        email = {
+            **_email_file("S", "x@y.com", "body"),
+            "attachments": [{"filename": "agenda.pdf", "mimetype": "application/pdf",
+                             "url": "https://files-origin.slack.com/x"}],
+        }
+        _, _, _, attachments = _extract_email_content([email])
+        assert attachments[0]["name"] == "agenda.pdf"
+
+    def test_attachment_falls_back_to_name_then_title(self):
+        """Falls back to 'name' then 'title' when 'filename' is absent."""
+        email = {
+            **_email_file("S", "x@y.com", "body"),
+            "attachments": [{"title": "report.pdf", "mimetype": "application/pdf",
+                             "url_private": "https://slack.com/x"}],
+        }
+        _, _, _, attachments = _extract_email_content([email])
+        assert attachments[0]["name"] == "report.pdf"
+
+    def test_attachment_filetype_derived_from_mime(self):
+        email = {
+            **_email_file("S", "x@y.com", "body"),
+            "attachments": [{"filename": "file.docx",
+                             "mimetype": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                             "url": "https://files-origin.slack.com/x"}],
+        }
+        _, _, _, attachments = _extract_email_content([email])
+        assert attachments[0]["filetype"] == "docx"
+
+    def test_attachment_with_no_url_is_still_listed(self):
+        """Attachments without a download URL should still appear in the list (listed only)."""
+        email = {
+            **_email_file("S", "x@y.com", "body"),
+            "attachments": [{"name": "doc.pdf", "mimetype": "application/pdf"}],
+        }
+        _, _, _, attachments = _extract_email_content([email])
+        assert len(attachments) == 1
+        assert attachments[0]["name"] == "doc.pdf"
+
+    def test_empty_attachments_list_produces_no_attachments(self):
+        email = {**_email_file("S", "x@y.com", "body"), "attachments": []}
+        _, _, _, attachments = _extract_email_content([email])
+        assert attachments == []
+
+
+# ── _mime_to_filetype ──────────────────────────────────────────────────────────
+
+class TestMimeToFiletype:
+    def test_pdf_mime(self):
+        assert _mime_to_filetype("application/pdf") == "pdf"
+
+    def test_docx_mime(self):
+        assert _mime_to_filetype(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ) == "docx"
+
+    def test_unknown_mime_uses_subtype(self):
+        assert _mime_to_filetype("image/jpeg") == "jpeg"
+
+    def test_vnd_prefix_stripped(self):
+        result = _mime_to_filetype("application/vnd.ms-excel")
+        assert "vnd" not in result
+
+    def test_empty_mime_returns_empty(self):
+        assert _mime_to_filetype("") == ""
