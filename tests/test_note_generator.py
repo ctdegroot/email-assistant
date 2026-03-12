@@ -8,6 +8,7 @@ import pytest
 from email_to_motion.note_generator import (
     _extract_tags_from_markdown,
     _safe_filename,
+    _strip_note_fence,
 )
 
 
@@ -115,3 +116,41 @@ class TestExtractTagsFromMarkdown:
         # Quotes should be stripped
         for t in tags:
             assert "'" not in t
+
+
+# ── _strip_note_fence ──────────────────────────────────────────────────────────
+
+_BARE_NOTE = "---\ndate: 2026-03-12\n---\n\n## Summary\nHello."
+
+
+class TestStripNoteFence:
+
+    def test_no_fence_unchanged(self):
+        assert _strip_note_fence(_BARE_NOTE) == _BARE_NOTE
+
+    def test_markdown_fence_stripped(self):
+        fenced = f"```markdown\n{_BARE_NOTE}\n```"
+        assert _strip_note_fence(fenced) == _BARE_NOTE
+
+    def test_yaml_fence_stripped(self):
+        fenced = f"```yaml\n{_BARE_NOTE}\n```"
+        assert _strip_note_fence(fenced) == _BARE_NOTE
+
+    def test_plain_fence_stripped(self):
+        fenced = f"```\n{_BARE_NOTE}\n```"
+        assert _strip_note_fence(fenced) == _BARE_NOTE
+
+    def test_md_fence_stripped(self):
+        fenced = f"```md\n{_BARE_NOTE}\n```"
+        assert _strip_note_fence(fenced) == _BARE_NOTE
+
+    def test_leading_trailing_whitespace_ignored(self):
+        fenced = f"  ```markdown\n{_BARE_NOTE}\n```  "
+        # strip_note_fence calls text.strip() first, so surrounding whitespace is fine
+        assert _strip_note_fence(fenced) == _BARE_NOTE
+
+    def test_partial_fence_not_stripped(self):
+        # Only an opening fence — should be left alone rather than mangled
+        partial = f"```markdown\n{_BARE_NOTE}"
+        result = _strip_note_fence(partial)
+        assert "---" in result  # content preserved, no crash

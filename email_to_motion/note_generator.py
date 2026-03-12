@@ -22,6 +22,28 @@ from pathlib import Path
 from . import config
 
 
+# ── Output sanitisation ───────────────────────────────────────────────────────
+
+# Claude occasionally wraps its entire response in a code fence despite being
+# told not to, e.g.:
+#   ```markdown
+#   ---
+#   date: ...
+#   ```
+# Obsidian can't parse frontmatter inside backticks, so we strip the fence.
+_FENCE_RE = re.compile(
+    r'^```(?:markdown|yaml|md)?\s*\n(.*?)\n?```\s*$',
+    re.DOTALL,
+)
+
+
+def _strip_note_fence(text: str) -> str:
+    """Remove an outer ``` code fence from a note response, if present."""
+    text = text.strip()
+    m = _FENCE_RE.match(text)
+    return m.group(1).strip() if m else text
+
+
 # ── Canonical tag store ───────────────────────────────────────────────────────
 
 _TAGS_FILE = Path.home() / ".email_to_motion" / "known_tags.json"
@@ -204,7 +226,7 @@ def generate_note(
         system=_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )
-    markdown = response.content[0].text.strip()
+    markdown = _strip_note_fence(response.content[0].text)
 
     # Update the canonical tag store with any tags used in this note
     _save_known_tags(_extract_tags_from_markdown(markdown))

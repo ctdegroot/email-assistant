@@ -5,6 +5,7 @@ No Slack API calls, no file downloads.
 
 import pytest
 
+import email_to_motion.slack_notes_handler as snh
 from email_to_motion.slack_notes_handler import (
     _extract_email_content,
     _mime_to_filetype,
@@ -319,3 +320,44 @@ class TestMimeToFiletype:
 
     def test_empty_mime_returns_empty(self):
         assert _mime_to_filetype("") == ""
+
+
+# ── _processing_ts dedup guard ─────────────────────────────────────────────────
+
+class TestProcessingTsGuard:
+    """
+    The _processing_ts set is the shared state that prevents a message from
+    being processed simultaneously by the socket listener and the startup sweep.
+    These tests verify that the set itself behaves as expected as a guard
+    (the full threading scenario is an integration concern).
+    """
+
+    def setup_method(self):
+        """Start each test with a clean _processing_ts."""
+        snh._processing_ts.clear()
+
+    def teardown_method(self):
+        snh._processing_ts.clear()
+
+    def test_empty_set_does_not_block(self):
+        assert "1234.5678" not in snh._processing_ts
+
+    def test_adding_ts_blocks_duplicate(self):
+        snh._processing_ts.add("1234.5678")
+        assert "1234.5678" in snh._processing_ts
+
+    def test_discard_clears_ts(self):
+        snh._processing_ts.add("1234.5678")
+        snh._processing_ts.discard("1234.5678")
+        assert "1234.5678" not in snh._processing_ts
+
+    def test_discard_missing_ts_does_not_raise(self):
+        # discard() must not raise even if the ts was never added
+        snh._processing_ts.discard("never-added")
+
+    def test_multiple_ts_tracked_independently(self):
+        snh._processing_ts.add("ts1")
+        snh._processing_ts.add("ts2")
+        snh._processing_ts.discard("ts1")
+        assert "ts1" not in snh._processing_ts
+        assert "ts2" in snh._processing_ts

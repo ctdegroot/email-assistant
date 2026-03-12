@@ -41,6 +41,12 @@ log = logging.getLogger(__name__)
 
 _channel_id: str = ""
 
+# ── In-flight deduplication ───────────────────────────────────────────────────
+# Tracks message timestamps currently being processed by the socket listener.
+# The startup sweep checks this set to avoid re-processing a message that the
+# socket thread has already started on (but hasn't yet added the ✅ reaction).
+_processing_ts: set[str] = set()
+
 
 def init(channel_name: str):
     """
@@ -272,6 +278,13 @@ def process_unprocessed_notes():
         return
 
     for msg in msgs:
+        # Skip any message already being handled by the socket listener thread.
+        # Without this guard, a message that arrived while the service is running
+        # would be processed twice: once in real time via the socket, and again
+        # here before the socket thread has had time to add the ✅ reaction.
+        if msg.get("ts") in _processing_ts:
+            log.info("notes sweep: skipping ts=%s — already in flight", msg.get("ts"))
+            continue
         # conversations_history messages don't carry a 'channel' field —
         # inject it so process_message() can post confirmations and mark ✅
         process_message({**msg, "channel": _channel_id})
@@ -298,6 +311,24 @@ def process_message(event: dict):
     if subtype in ("message_changed", "message_deleted", "channel_join", "channel_leave"):
         return
 
+    # Register this message as in-flight so the startup sweep doesn't also
+    # process it. Always deregister on exit (success or exception) so the set
+    # never grows stale.
+    ts = event.get("ts", "")
+    if ts in _processing_ts:
+        log.info("notes: skipping duplicate event ts=%s", ts)
+        return
+    if ts:
+        _processing_ts.add(ts)
+
+    try:
+        _process_message_inner(event)
+    finally:
+        _processing_ts.discard(ts)
+
+
+def _process_message_inner(event: dict):
+    """Inner implementation — called only after the dedup guard in process_message()."""
     channel_id = event.get("channel", "")
     files      = event.get("files") or []
 
