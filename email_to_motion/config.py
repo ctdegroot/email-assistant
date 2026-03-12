@@ -42,9 +42,22 @@ SLACK_CONFLICT_CHANNEL    = os.environ.get("SLACK_CONFLICT_CHANNEL", "")
 # Leave blank to disable note processing.
 SLACK_NOTES_CHANNEL       = os.environ.get("SLACK_NOTES_CHANNEL", "")
 
-# Where to write generated .md note files (Stage 1 — local inspection).
+# Where to write generated .md note files (always written locally for inspection/backup).
 # Defaults to ~/email_to_motion_notes/. Use an absolute path for a Linux server.
 NOTES_OUTPUT_PATH         = os.environ.get("NOTES_OUTPUT_PATH", "~/email_to_motion_notes")
+
+# ── Obsidian vault delivery (Stage 2) ─────────────────────────────────────────
+# Set OBSIDIAN_DELIVERY=git to push notes to the vault via Git after writing locally.
+# Leave unset (or set to "local") to write only to NOTES_OUTPUT_PATH.
+OBSIDIAN_DELIVERY         = os.environ.get("OBSIDIAN_DELIVERY", "local").lower()
+
+# Absolute (or ~/…) path to the local Git clone of your Obsidian vault on this server.
+OBSIDIAN_VAULT_PATH       = os.environ.get("OBSIDIAN_VAULT_PATH", "~/obsidian-vault")
+
+# Subfolder inside the vault where inbox notes should be written.
+# The folder is created automatically if it doesn't exist.
+# Example: "Notes/Inbox" or "00 Inbox"
+OBSIDIAN_NOTES_SUBFOLDER  = os.environ.get("OBSIDIAN_NOTES_SUBFOLDER", "Notes/Inbox")
 
 PROCESSED_EMOJI = "white_check_mark"   # ✅ added to handled messages
 

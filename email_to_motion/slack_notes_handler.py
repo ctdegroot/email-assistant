@@ -26,6 +26,7 @@ import requests
 
 from . import config
 from . import note_generator
+from . import vault_writer
 from .slack_helpers import get_channel_id, get_unprocessed_messages, mark_processed
 
 
@@ -290,7 +291,7 @@ def process_message(event: dict):
         )
         return
 
-    # ── Write the .md file ────────────────────────────────────────────────────
+    # ── Write the .md file locally ────────────────────────────────────────────
     output_dir = Path(config.NOTES_OUTPUT_PATH).expanduser().resolve()
     try:
         written_path = note_generator.write_note(markdown, subject, output_dir)
@@ -301,6 +302,16 @@ def process_message(event: dict):
         )
         return
 
+    # ── Optionally push to Obsidian vault via Git ─────────────────────────────
+    vault_path: Path | None = None
+    vault_error: str        = ""
+
+    if config.OBSIDIAN_DELIVERY == "git":
+        try:
+            vault_path = vault_writer.push_to_vault(markdown, written_path.name)
+        except Exception as e:
+            vault_error = str(e)
+
     # Mark the original message as processed so it's skipped on the next sweep
     ts = event.get("ts", "")
     if ts:
@@ -309,20 +320,27 @@ def process_message(event: dict):
     # ── Confirm in Slack ──────────────────────────────────────────────────────
     att_line = ""
     if attachment_names:
-        parsed    = [n for n in attachment_names if n in attachment_texts]
-        unparsed  = [n for n in attachment_names if n not in attachment_texts]
-        parts     = []
+        parsed   = [n for n in attachment_names if n in attachment_texts]
+        unparsed = [n for n in attachment_names if n not in attachment_texts]
+        parts    = []
         if parsed:
             parts.append(f"parsed: {', '.join(parsed)}")
         if unparsed:
             parts.append(f"listed only: {', '.join(unparsed)}")
         att_line = f"\n  Attachments — {'; '.join(parts)}"
 
+    if vault_path:
+        delivery_line = f"\n  📚 Pushed to vault: `{vault_path}`"
+    elif vault_error:
+        delivery_line = f"\n  ⚠️ Vault push failed: {vault_error}"
+    else:
+        delivery_line = f"\n  `{written_path}`"
+
     config.slack.chat_postMessage(
         channel=channel_id,
         text=(
             f"📝 Note saved: *{written_path.name}*"
-            f"{att_line}\n"
-            f"  `{written_path}`"
+            f"{att_line}"
+            f"{delivery_line}"
         ),
     )
