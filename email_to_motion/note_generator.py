@@ -89,7 +89,7 @@ _SYSTEM = (
 )
 
 _TEMPLATE = """\
-Convert the following email into an Obsidian Markdown note.
+Convert the following email (and any attachments) into an Obsidian Markdown note.
 
 INSTRUCTIONS:
 - Start with YAML frontmatter containing exactly these keys:
@@ -99,17 +99,30 @@ INSTRUCTIONS:
     tags:        (a YAML list — see tagging rules below)
     attachments: (a YAML list of attachment filenames, or [] if none)
 - Then a blank line, then the body in this order:
+
     ## Summary
     2–4 sentence overview of what this email is about and why it matters.
 
     ## Key Points
-    Bullet list of the most important facts, decisions, or conclusions.
+    Bullet list of the most important facts, decisions, or actions from the
+    email body itself (not the attachments).
+    Omit this section if the email body contains no substantive content beyond
+    a forwarding note.
+
+    ## [Attachment Name]  ← one section per attachment, titled with the file name
+    Reproduce the meaningful substance of the attachment in full:
+      - Specific steps, rules, requirements, numbers, names, deadlines.
+      - Use nested bullets to mirror the document's own structure.
+      - Do NOT just list topics or write a one-line summary.
+      - The goal is for this section to be a complete reference so the reader
+        never needs to open the original file.
+    Repeat this pattern for each attachment present.
 
     ## Notes
-    Any additional detail worth preserving — context, caveats, numbers, names.
-    Omit this section entirely if there is nothing beyond the Key Points.
-- Keep the whole note under ~400 words unless the content genuinely requires more.
-- Do not invent information not present in the email.
+    Any additional context, caveats, or follow-up items not captured above.
+    Omit entirely if nothing remains.
+
+- Do not invent information not present in the source material.
 
 TAGGING RULES:
 {tag_instructions}
@@ -157,11 +170,14 @@ def generate_note(
     Each attachment's text is capped at 3 000 characters so the prompt
     stays well within token limits even with large documents.
     """
+    # Each attachment gets up to 8 000 chars — enough for a detailed multi-page
+    # document while staying well within the model's context window.
     att_content_parts = []
     for fname, text in attachment_texts.items():
-        snippet = text[:3000]
-        if len(text) > 3000:
-            snippet += f"\n… (truncated — {len(text) - 3000} chars omitted)"
+        cap = 8000
+        snippet = text[:cap]
+        if len(text) > cap:
+            snippet += f"\n… (truncated — {len(text) - cap} chars omitted)"
         att_content_parts.append(f"--- {fname} ---\n{snippet}")
 
     known_tags = _load_known_tags()
@@ -180,9 +196,11 @@ def generate_note(
         attachment_content="\n\n".join(att_content_parts) or "(none)",
     )
 
+    # max_tokens is sized to fit a detailed note with fully-expanded attachment
+    # sections (a few pages of source material → ~600–800 words of note).
     response = config.claude.messages.create(
         model="claude-sonnet-4-5-20250929",
-        max_tokens=1200,
+        max_tokens=3000,
         system=_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )
