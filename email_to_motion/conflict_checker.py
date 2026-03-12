@@ -191,11 +191,9 @@ def debug_events(channel_id: str):
     """
     monday, friday = _current_week_range()
     try:
-        import requests as _req
-        from icalendar import Calendar as _Cal
-        r = _req.get(config.OUTLOOK_ICS_URL, timeout=15)
+        r = requests.get(config.OUTLOOK_ICS_URL, timeout=15)
         r.raise_for_status()
-        cal = _Cal.from_ical(r.content)
+        cal = Calendar.from_ical(r.content)
         window_start = datetime.combine(monday, time(0, 0))
         window_end   = datetime.combine(friday, time(23, 59, 59))
         raw_events   = recurring_ical_events.of(cal).between(window_start, window_end)

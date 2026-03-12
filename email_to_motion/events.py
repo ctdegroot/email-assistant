@@ -12,8 +12,6 @@ Note: this module is named 'events' rather than 'calendar' to avoid shadowing
 Python's standard-library 'calendar' module.
 """
 
-import json
-import os
 import smtplib
 import uuid
 import pytz
@@ -23,8 +21,19 @@ from email.mime.text import MIMEText
 from icalendar import Calendar, Event as CalEvent
 from . import config
 from .slack_helpers import get_channel_id, get_unprocessed_messages, mark_processed, extract_email_text
+from .utils import parse_claude_json
 
 TORONTO_TZ = pytz.timezone("America/Toronto")
+
+# ── Channel ID cache ──────────────────────────────────────────────────────────
+_channel_id: str = ""
+
+
+def _get_channel_id() -> str:
+    global _channel_id
+    if not _channel_id:
+        _channel_id = get_channel_id(config.SLACK_CALENDAR_CHANNEL)
+    return _channel_id
 
 # ── Claude prompts ────────────────────────────────────────────────────────────
 
@@ -83,13 +92,7 @@ def analyze_email_for_event(email_text: str) -> dict:
             ),
         }],
     )
-    raw = response.content[0].text.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-        raw = raw.strip().rstrip("`").strip()
-    return json.loads(raw)
+    return parse_claude_json(response.content[0].text)
 
 
 # ── ICS generation ────────────────────────────────────────────────────────────
@@ -134,8 +137,8 @@ def create_ics(event: dict) -> bytes:
 def send_calendar_invite(event: dict, ics_bytes: bytes):
     """Send the .ics as an email attachment via Gmail SMTP (port 587 / STARTTLS)."""
     msg = MIMEMultipart("mixed")
-    msg["From"]    = os.environ["SMTP_USER"]
-    msg["To"]      = os.environ["CALENDAR_EMAIL"]
+    msg["From"]    = config.SMTP_USER
+    msg["To"]      = config.CALENDAR_EMAIL
     msg["Subject"] = f"Calendar: {event['title']}"
 
     lines = [f"Event:    {event['title']}",
@@ -154,7 +157,7 @@ def send_calendar_invite(event: dict, ics_bytes: bytes):
     with smtplib.SMTP("smtp.gmail.com", 587) as server:
         server.ehlo()
         server.starttls()
-        server.login(os.environ["SMTP_USER"], os.environ["SMTP_PASSWORD"])
+        server.login(config.SMTP_USER, config.SMTP_PASSWORD)
         server.send_message(msg)
 
 
@@ -162,7 +165,7 @@ def send_calendar_invite(event: dict, ics_bytes: bytes):
 
 def process_calendar_channel() -> int:
     """Process all unhandled emails in the calendar Slack channel. Returns invites sent."""
-    channel_id = get_channel_id(config.SLACK_CALENDAR_CHANNEL)
+    channel_id = _get_channel_id()
     messages   = get_unprocessed_messages(channel_id)
 
     if not messages:

@@ -21,6 +21,8 @@ SLACK_MOTION_CHANNEL_NAME = os.environ.get("SLACK_MOTION_CHANNEL", "email-to-mot
 SLACK_CALENDAR_CHANNEL    = os.environ.get("SLACK_CALENDAR_CHANNEL", "email-to-calendar")
 MOTION_API_KEY            = os.environ.get("MOTION_API_KEY", "")
 MOTION_WORKSPACE_ID       = os.environ.get("MOTION_WORKSPACE_ID", "")
+# Motion user ID to assign created tasks to. Find yours at usemotion.com → Settings → Profile.
+MOTION_ASSIGNEE_ID        = os.environ.get("MOTION_ASSIGNEE_ID", "")
 ANTHROPIC_API_KEY         = os.environ.get("ANTHROPIC_API_KEY", "")
 SMTP_USER                 = os.environ.get("SMTP_USER", "")
 SMTP_PASSWORD             = os.environ.get("SMTP_PASSWORD", "")
@@ -70,8 +72,8 @@ OWN_BOT_ID: str | None                = None
 
 def validate():
     missing = [v for v in [
-        "SLACK_BOT_TOKEN", "MOTION_API_KEY", "MOTION_WORKSPACE_ID", "ANTHROPIC_API_KEY",
-        "SMTP_USER", "SMTP_PASSWORD", "CALENDAR_EMAIL",
+        "SLACK_BOT_TOKEN", "MOTION_API_KEY", "MOTION_WORKSPACE_ID", "MOTION_ASSIGNEE_ID",
+        "ANTHROPIC_API_KEY", "SMTP_USER", "SMTP_PASSWORD", "CALENDAR_EMAIL",
     ] if not os.environ.get(v)]
     if missing:
         print("❌  Missing required environment variables:")

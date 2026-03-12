@@ -20,6 +20,7 @@ Stage 2 (future): also push to Obsidian vault via Git.
 
 import io
 import re
+from datetime import datetime
 from pathlib import Path
 
 import requests
@@ -250,7 +251,6 @@ def process_message(event: dict):
     if not body:
         body = (event.get("text") or "").strip()
 
-    from datetime import datetime
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # ── Download and extract attachment text ──────────────────────────────────

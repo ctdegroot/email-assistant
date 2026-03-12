@@ -5,7 +5,6 @@ Covers: channel lookup, message fetching, processed-emoji marking,
 attachment downloading, and email content extraction.
 """
 
-import os
 import requests
 from slack_sdk.errors import SlackApiError
 from . import config
@@ -67,7 +66,7 @@ def _fetch_attachment_text(file: dict) -> str | None:
     try:
         r = requests.get(
             url,
-            headers={"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"},
+            headers={"Authorization": f"Bearer {config.SLACK_BOT_TOKEN}"},
             timeout=10,
         )
         r.raise_for_status()

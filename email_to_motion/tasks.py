@@ -8,12 +8,22 @@ Responsibilities:
   4. Orchestrate the above for every unprocessed message in the tasks channel.
 """
 
-import json
-import os
 import requests
 from datetime import date, timedelta
 from . import config
 from .slack_helpers import get_channel_id, get_unprocessed_messages, mark_processed, extract_email_text
+from .utils import parse_claude_json
+
+# ── Channel ID cache ──────────────────────────────────────────────────────────
+# Resolved once on first use to avoid a full paginated Slack API call every poll.
+_channel_id: str = ""
+
+
+def _get_channel_id() -> str:
+    global _channel_id
+    if not _channel_id:
+        _channel_id = get_channel_id(config.SLACK_MOTION_CHANNEL_NAME)
+    return _channel_id
 
 # ── Claude prompts ────────────────────────────────────────────────────────────
 
@@ -93,13 +103,7 @@ def analyze_with_claude(email_text: str) -> list[dict]:
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": USER_PROMPT_TEMPLATE.format(email_text=email_text)}],
     )
-    raw = response.content[0].text.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-        raw = raw.strip().rstrip("`").strip()
-    result = json.loads(raw)
+    result = parse_claude_json(response.content[0].text)
     return result if isinstance(result, list) else [result]
 
 
@@ -110,7 +114,7 @@ MOTION_BASE = "https://api.usemotion.com/v1"
 
 def _motion_headers() -> dict:
     return {
-        "X-API-Key":    os.environ.get("MOTION_API_KEY", ""),
+        "X-API-Key":    config.MOTION_API_KEY,
         "Content-Type": "application/json",
         "Accept":       "application/json",
         "User-Agent":   (
@@ -134,7 +138,7 @@ def create_motion_task(task: dict) -> dict:
         "description": task.get("description", ""),
         "priority":    task.get("priority", "MEDIUM"),
         "duration":    task.get("duration", 30),
-        "assigneeId":  "wOk1EFafEIX7LAcf1yuYXjtw6aH2",
+        "assigneeId":  config.MOTION_ASSIGNEE_ID,
         "dueDate":     due,
         "autoScheduled": {
             "deadlineType": task.get("deadlineType", "SOFT"),
@@ -163,7 +167,7 @@ def _post_confirmation(channel_id: str, ts: str, tasks: list[dict]):
 
 def process_channel() -> int:
     """Process all unhandled emails in the tasks Slack channel. Returns number of tasks created."""
-    channel_id = get_channel_id(config.SLACK_MOTION_CHANNEL_NAME)
+    channel_id = _get_channel_id()
     messages   = get_unprocessed_messages(channel_id)
 
     if not messages:
