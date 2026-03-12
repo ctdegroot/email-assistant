@@ -7,3 +7,5 @@ pytz
 recurring-ical-events
 websocket-client
 schedule
+pdfplumber
+python-docx

@@ -2,16 +2,18 @@
 socket_listener.py — Slack Socket Mode listener.
 
 Maintains a persistent WebSocket connection to Slack so the app can receive
-slash command invocations, message shortcuts, and modal submissions in real
-time, without exposing a public HTTP endpoint.
+slash command invocations, message shortcuts, modal submissions, and channel
+message events in real time, without exposing a public HTTP endpoint.
 
 connect() is non-blocking: the WebSocket runs in SDK-managed background threads,
 so this integrates cleanly with the existing synchronous polling loop.
 
 Currently registered:
   /availability <date range> [minutes]  — check calendar availability
+  /conflict-check [force | debug]       — check for calendar conflicts
   "Create Task" message shortcut        — open modal → create Motion task
   "Create Calendar Event" shortcut      — open modal → send calendar invite
+  #notes-inbox messages                 — generate Obsidian .md note from forwarded email
 """
 
 import re
@@ -28,6 +30,14 @@ from .availability import (
 )
 from . import shortcuts
 from . import conflict_checker
+from . import slack_notes_handler
+from .tasks import process_channel
+from .events import process_calendar_channel
+from .slack_helpers import get_channel_id
+
+# Channel IDs resolved once at startup for event-driven dispatch
+_tasks_channel_id:    str = ""
+_calendar_channel_id: str = ""
 
 
 def _is_authorized(user_id: str) -> bool:
@@ -176,6 +186,33 @@ def _dispatch(client: SocketModeClient, req: SocketModeRequest):
                     daemon=True,
                 ).start()
 
+    # ── Channel message events (notes inbox) ──────────────────────────────────
+    # Triggered when a message is posted to any channel the bot is in that has
+    # the message.channels / message.groups event subscription enabled.
+    # We filter to SLACK_NOTES_CHANNEL_ID so only the dedicated inbox is handled.
+    elif req.type == "events_api":
+        event      = req.payload.get("event", {})
+        event_type = event.get("type")
+        channel    = event.get("channel")
+
+        if event_type == "message":
+            if _tasks_channel_id and channel == _tasks_channel_id:
+                threading.Thread(
+                    target=process_channel,
+                    daemon=True,
+                ).start()
+            elif _calendar_channel_id and channel == _calendar_channel_id:
+                threading.Thread(
+                    target=process_calendar_channel,
+                    daemon=True,
+                ).start()
+            elif slack_notes_handler._channel_id and channel == slack_notes_handler._channel_id:
+                threading.Thread(
+                    target=slack_notes_handler.process_message,
+                    args=(event,),
+                    daemon=True,
+                ).start()
+
 
 def start(app_token: str) -> SocketModeClient:
     """
@@ -190,8 +227,26 @@ def start(app_token: str) -> SocketModeClient:
     )
     client.socket_mode_request_listeners.append(_dispatch)
     client.connect()
+
+    global _tasks_channel_id, _calendar_channel_id
+    for name, attr in [
+        (config.SLACK_MOTION_CHANNEL_NAME, "_tasks_channel_id"),
+        (config.SLACK_CALENDAR_CHANNEL,    "_calendar_channel_id"),
+    ]:
+        try:
+            globals()[attr] = get_channel_id(name)
+        except Exception as e:
+            print(f"⚠️  Could not resolve channel '{name}': {e}")
+
+    slack_notes_handler.init(config.SLACK_NOTES_CHANNEL)
+    notes_status = (
+        f"notes-inbox #{config.SLACK_NOTES_CHANNEL} ({slack_notes_handler._channel_id})"
+        if slack_notes_handler._channel_id
+        else "notes-inbox disabled"
+    )
     print(
-        "🔌  Socket Mode connected — "
-        "/availability, Create Task, and Create Calendar Event are active."
+        f"🔌  Socket Mode connected — "
+        f"/availability, /conflict-check, Create Task, Create Calendar Event, "
+        f"{notes_status} active."
     )
     return client

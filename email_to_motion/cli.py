@@ -13,6 +13,7 @@ from .tasks import get_workspaces, process_channel
 from .events import process_calendar_channel
 from . import socket_listener
 from . import scheduler
+from . import slack_notes_handler
 
 
 def main():
@@ -73,6 +74,7 @@ def main():
         if run_calendar:
             print(f"Checking #{config.SLACK_CALENDAR_CHANNEL}…")
             process_calendar_channel()
+        slack_notes_handler.process_unprocessed_notes()
 
     if args.loop:
         print(f"🔄  Running every {args.interval} minutes. Ctrl-C to stop.\n")

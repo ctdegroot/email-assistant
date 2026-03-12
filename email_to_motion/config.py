@@ -38,6 +38,14 @@ ALLOWED_SLACK_USER_ID     = os.environ.get("ALLOWED_SLACK_USER_ID", "")
 # Channel to post conflict alerts to. Defaults to SLACK_MOTION_CHANNEL if not set.
 SLACK_CONFLICT_CHANNEL    = os.environ.get("SLACK_CONFLICT_CHANNEL", "")
 
+# Notes inbox — channel name (without #) for email-to-note forwarding.
+# Leave blank to disable note processing.
+SLACK_NOTES_CHANNEL       = os.environ.get("SLACK_NOTES_CHANNEL", "")
+
+# Where to write generated .md note files (Stage 1 — local inspection).
+# Defaults to ~/email_to_motion_notes/. Use an absolute path for a Linux server.
+NOTES_OUTPUT_PATH         = os.environ.get("NOTES_OUTPUT_PATH", "~/email_to_motion_notes")
+
 PROCESSED_EMOJI = "white_check_mark"   # ✅ added to handled messages
 
 # ── Shared clients (set by init_clients()) ────────────────────────────────────

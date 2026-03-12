@@ -11,9 +11,7 @@
 
 display_information:
   name: EmailToMotion
-  description: >
-    Converts forwarded emails into Motion tasks and Outlook calendar events.
-    Supports message shortcuts and the /availability slash command.
+  description: Personal productivity assistant — turns emails into tasks, calendar events, and notes.
 
 features:
 
@@ -61,5 +59,9 @@ settings:
   interactivity:
     is_enabled: true        # Required for message shortcuts
   org_deploy_enabled: false
-  socket_mode_enabled: true # Slash commands and shortcuts use Socket Mode
+  socket_mode_enabled: true # Slash commands, shortcuts, and events use Socket Mode
   token_rotation_enabled: false
+  event_subscriptions:
+    bot_events:
+      - message.channels   # Messages in public channels the bot has been invited to
+      - message.groups     # Messages in private channels the bot has been invited to
