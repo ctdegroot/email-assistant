@@ -818,3 +818,203 @@ Updated summary.
         assert len(all_files) == 1, (
             f"Expected 1 note (old file reused), got: {[f.name for f in all_files]}"
         )
+
+
+# ── URL note pipeline ─────────────────────────────────────────────────────────
+
+def _url_event(url="https://example.com/article", ts=_TS, channel=_CHANNEL):
+    """A minimal Slack event where the user pasted a URL into the channel."""
+    return {
+        "type":    "message",
+        "ts":      ts,
+        "channel": channel,
+        "text":    url,
+        "files":   [],
+    }
+
+
+_FAKE_HTML = """\
+<html><head><title>Test Article | Example University</title></head>
+<body>
+<article>
+<h1>Test Article</h1>
+<p>This is the main body of the article with enough content for trafilatura.</p>
+<p>Second paragraph with more detail about the topic at hand.</p>
+</article>
+</body></html>
+"""
+
+_FAKE_EXTRACTED = "Test Article\n\nThis is the main body of the article with enough content for trafilatura.\n\nSecond paragraph with more detail about the topic at hand."
+
+
+class TestUrlNotePipeline:
+    """
+    Tests for the URL-note input mode: user pastes a URL into #notes-inbox
+    and the bot fetches the page and generates a note from its content.
+    """
+
+    @pytest.fixture()
+    def url_env(self, notes_env, monkeypatch):
+        """notes_env with trafilatura stubbed out."""
+        monkeypatch.setattr(
+            "email_to_motion.slack_notes_handler._fetch_url_content",
+            lambda url, channel_id: ("Test Article", _FAKE_EXTRACTED),
+        )
+        return notes_env
+
+    def test_url_message_creates_note(self, url_env):
+        snh.process_message(_url_event())
+        files = _written_files(url_env["tmp_path"])
+        assert len(files) == 1, f"Expected 1 note from URL, got: {[f.name for f in files]}"
+
+    def test_url_title_becomes_subject_in_filename(self, url_env):
+        snh.process_message(_url_event())
+        filename = _written_files(url_env["tmp_path"])[0].name
+        assert "Test Article" in filename
+
+    def test_url_content_reaches_claude(self, url_env):
+        snh.process_message(_url_event())
+        prompt = url_env["claude"].messages.create.call_args.kwargs["messages"][0]["content"]
+        assert _FAKE_EXTRACTED in prompt
+
+    def test_url_used_as_sender_in_prompt(self, url_env):
+        url = "https://example.com/article"
+        snh.process_message(_url_event(url=url))
+        prompt = url_env["claude"].messages.create.call_args.kwargs["messages"][0]["content"]
+        assert url in prompt
+
+    def test_url_slack_confirmation_sent(self, url_env):
+        snh.process_message(_url_event())
+        url_env["slack"].chat_postMessage.assert_called()
+        text = url_env["slack"].chat_postMessage.call_args.kwargs["text"]
+        assert "📝" in text
+
+    def test_url_message_marked_processed(self, url_env):
+        snh.process_message(_url_event())
+        url_env["slack"].reactions_add.assert_called_once()
+
+    def test_same_url_repasted_is_unchanged(self, url_env):
+        """Re-pasting the same URL should detect the existing note via hash and not duplicate."""
+        snh.process_message(_url_event(ts="1111111111.000001"))
+        snh.process_message(_url_event(ts="2222222222.000002"))
+        files = _written_files(url_env["tmp_path"])
+        assert len(files) == 1, f"Same URL re-pasted must not create 2 files: {[f.name for f in files]}"
+
+    def test_url_fetch_failure_posts_error(self, notes_env, monkeypatch):
+        """When _fetch_url_content returns None (fetch failed), a ⚠️ is posted."""
+        monkeypatch.setattr(
+            "email_to_motion.slack_notes_handler._fetch_url_content",
+            lambda url, channel_id: None,
+        )
+        # The function posts the error itself; process_message should bail without writing
+        snh.process_message(_url_event())
+        assert _written_files(notes_env["tmp_path"]) == []
+
+    def test_url_fetch_failure_does_not_mark_processed(self, notes_env, monkeypatch):
+        """A failed URL fetch must not add ✅ — the user should be able to retry."""
+        monkeypatch.setattr(
+            "email_to_motion.slack_notes_handler._fetch_url_content",
+            lambda url, channel_id: None,
+        )
+        snh.process_message(_url_event())
+        notes_env["slack"].reactions_add.assert_not_called()
+
+    def test_non_url_short_message_not_treated_as_url(self, notes_env):
+        """A plain-text message (no URL) must go through the regular text path."""
+        event = {
+            "type": "message", "ts": _TS, "channel": _CHANNEL,
+            "text": "Please take a look at this issue.", "files": [],
+        }
+        snh.process_message(event)
+        # Claude should be called (regular text path) and a note written
+        notes_env["claude"].messages.create.assert_called_once()
+
+    def test_url_with_short_label_detected(self, notes_env, monkeypatch):
+        """A message like 'FYI: https://...' is still a URL note."""
+        monkeypatch.setattr(
+            "email_to_motion.slack_notes_handler._fetch_url_content",
+            lambda url, channel_id: ("Page Title", "Page body content."),
+        )
+        event = {
+            "type": "message", "ts": _TS, "channel": _CHANNEL,
+            "text": "FYI: https://example.com/page", "files": [],
+        }
+        snh.process_message(event)
+        files = _written_files(notes_env["tmp_path"])
+        assert len(files) == 1
+
+    def test_url_with_long_surrounding_text_not_treated_as_url(self, notes_env):
+        """A URL buried in a substantive message should not trigger URL-note mode."""
+        event = {
+            "type": "message", "ts": _TS, "channel": _CHANNEL,
+            "text": (
+                "I read this interesting article https://example.com and "
+                "thought we should discuss the implications for the project."
+            ),
+            "files": [],
+        }
+        snh.process_message(event)
+        # URL fetch must NOT have been called — regular text path instead
+        # (Claude called with the full message text as body)
+        prompt = notes_env["claude"].messages.create.call_args.kwargs["messages"][0]["content"]
+        assert "interesting article" in prompt
+
+
+# ── Direct file upload (no email wrapper) ─────────────────────────────────────
+
+class TestDirectFileUpload:
+    """
+    Tests for Mode 3: user drags a file (e.g. a PDF saved from the browser)
+    directly into the notes-inbox channel without forwarding an email.
+    """
+
+    def _pdf_event(self, filename="Budget-Q1-2026.pdf", ts=_TS, channel=_CHANNEL):
+        return {
+            "type":    "message",
+            "ts":      ts,
+            "channel": channel,
+            "text":    "",
+            "files": [
+                {
+                    "name":                 filename,
+                    "filetype":             "pdf",
+                    "mimetype":             "application/pdf",
+                    "url_private_download": "https://files.slack.com/files-pri/xxx/budget.pdf",
+                    "url_private":          "https://files.slack.com/files-pri/xxx/budget.pdf",
+                }
+            ],
+        }
+
+    def test_pdf_filename_used_as_subject(self, notes_env):
+        """The PDF filename (minus extension) becomes the note subject / filename."""
+        with patch("email_to_motion.slack_notes_handler.requests.get") as mock_get, \
+             patch.dict("email_to_motion.slack_notes_handler._BY_MIME",
+                        {"application/pdf": lambda _b: "Extracted PDF text"}):
+            mock_get.return_value = MagicMock(content=b"%PDF fake", status_code=200)
+            mock_get.return_value.raise_for_status = lambda: None
+            snh.process_message(self._pdf_event(filename="Budget-Q1-2026.pdf"))
+
+        filename = _written_files(notes_env["tmp_path"])[0].name
+        assert "Budget-Q1-2026" in filename, f"Expected stem in filename, got: {filename}"
+
+    def test_pdf_content_reaches_claude(self, notes_env):
+        """Extracted PDF text must appear in the Claude prompt."""
+        with patch("email_to_motion.slack_notes_handler.requests.get") as mock_get, \
+             patch.dict("email_to_motion.slack_notes_handler._BY_MIME",
+                        {"application/pdf": lambda _b: "Unique PDF content ZZZQ"}):
+            mock_get.return_value = MagicMock(content=b"%PDF fake", status_code=200)
+            mock_get.return_value.raise_for_status = lambda: None
+            snh.process_message(self._pdf_event())
+
+        prompt = notes_env["claude"].messages.create.call_args.kwargs["messages"][0]["content"]
+        assert "Unique PDF content ZZZQ" in prompt
+
+    def test_direct_pdf_creates_note_file(self, notes_env):
+        with patch("email_to_motion.slack_notes_handler.requests.get") as mock_get, \
+             patch.dict("email_to_motion.slack_notes_handler._BY_MIME",
+                        {"application/pdf": lambda _b: "PDF text"}):
+            mock_get.return_value = MagicMock(content=b"%PDF fake", status_code=200)
+            mock_get.return_value.raise_for_status = lambda: None
+            snh.process_message(self._pdf_event())
+
+        assert len(_written_files(notes_env["tmp_path"])) == 1

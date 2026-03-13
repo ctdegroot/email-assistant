@@ -1,18 +1,31 @@
 """
 slack_notes_handler.py — Process messages in the #notes-inbox Slack channel.
 
-When an email is forwarded to the channel via Slack's email integration, this
-module:
-  1. Extracts the message text (email body) and any file attachments.
-  2. Downloads and parses PDF and Word (.docx) attachments for their text.
-  3. Computes a SHA-256 source hash of the email content for deduplication.
-  4. Calls note_generator to produce structured Obsidian-flavoured Markdown.
-  5. Writes the .md file to NOTES_OUTPUT_PATH (dedup: overwrites if re-send,
-     creates a (2) file if genuinely different email with same subject/date).
-  6. Optionally pushes the note to the Obsidian vault via Git
-     (when OBSIDIAN_DELIVERY=git).
-  7. Posts a confirmation back to the channel — "saved", "updated", or
-     "unchanged" — and marks the original message with ✅.
+Three input modes are supported:
+
+  1. Forwarded email (Slack's email integration)
+     A filetype='email' file is attached to the message.  The email body,
+     sender, subject, and any attachments are extracted and sent to Claude.
+
+  2. Direct URL
+     The message text is (or contains) a URL with minimal surrounding text.
+     The page is fetched and its readable content extracted with trafilatura.
+     On fetch failure a ⚠️ error is posted with a "save as PDF" fallback hint.
+
+  3. Direct file upload (e.g. a PDF saved from the browser)
+     A file is pasted into the channel without an email wrapper.  The file is
+     downloaded and parsed; its filename (minus extension) is used as the note
+     subject.
+
+Pipeline (all three modes share steps 3 onwards):
+  1. Detect input mode and extract subject, sender, body, attachments.
+  2. Download and parse PDF / Word attachments for their text.
+  3. Compute a SHA-256 source hash for deduplication.
+  4. Call note_generator to produce structured Obsidian-flavoured Markdown.
+  5. Write the .md file to NOTES_OUTPUT_PATH (dedup: overwrite on re-send,
+     new (2) file for a genuinely different source with the same subject/date).
+  6. Optionally push to the Obsidian vault via Git (OBSIDIAN_DELIVERY=git).
+  7. Post a confirmation — "saved", "updated", or "unchanged" — and mark ✅.
 
 Error handling:
   On Claude or file-write failure: posts a ⚠️ warning to the channel and
@@ -335,6 +348,92 @@ def process_message(event: dict):
         _processing_ts.discard(ts)
 
 
+# ── URL note support ──────────────────────────────────────────────────────────
+
+# Matches Slack's auto-linked URL format (<https://url> or <https://url|label>)
+# and plain bare URLs.  Group 1 captures the URL from a Slack-formatted link;
+# group 2 captures a bare URL.
+_URL_RE = re.compile(r'<(https?://[^|>\s]+)[^>]*>|(https?://\S+)', re.IGNORECASE)
+
+
+def _extract_url(text: str) -> str | None:
+    """
+    If ``text`` is primarily a URL, return it — otherwise return None.
+
+    "Primarily a URL" means the non-URL portion of the message has fewer than
+    30 non-whitespace characters, so short labels like "FYI:" or "check this:"
+    are accepted but longer surrounding text is not.
+
+    Handles Slack's auto-linked format (``<https://...>`` or
+    ``<https://...|display text>``).  Strips trailing punctuation that
+    sometimes attaches to bare URLs.
+    """
+    m = _URL_RE.search(text)
+    if not m:
+        return None
+    url = (m.group(1) or m.group(2)).rstrip('.,;:)>\'"')
+
+    # Measure how much non-URL text surrounds the link
+    remainder = _URL_RE.sub("", text).strip()
+    if len(remainder.replace(" ", "").replace("\t", "")) >= 30:
+        return None  # substantive text alongside the URL → not a URL note
+
+    return url
+
+
+def _fetch_url_content(url: str, channel_id: str) -> tuple[str, str] | None:
+    """
+    Download ``url`` and extract readable article text using trafilatura.
+
+    Returns ``(title, content)`` on success.
+
+    On failure, posts a ⚠️ error to ``channel_id`` explaining what went wrong
+    and suggesting the PDF fallback (File → Print → Save as PDF, then paste
+    into the channel), then returns None so the caller can bail out cleanly.
+    """
+    try:
+        import trafilatura
+
+        downloaded = trafilatura.fetch_url(url)
+        if downloaded is None:
+            raise ValueError(
+                "page could not be downloaded — it may require JavaScript, "
+                "be behind a login, or block automated requests"
+            )
+
+        content = trafilatura.extract(
+            downloaded,
+            include_tables=True,
+            include_links=False,
+            favor_recall=True,   # prefer more content over precision
+        )
+        if not content:
+            raise ValueError(
+                "no readable text found — the page may be a login wall, "
+                "redirect, or mostly images"
+            )
+
+        # Extract and clean the <title> for the note subject.
+        # Strip common site-name suffixes like " | Western University".
+        title_m = re.search(r'<title[^>]*>([^<]+)</title>', downloaded, re.IGNORECASE)
+        title   = title_m.group(1).strip() if title_m else url
+        title   = re.sub(r'\s*[|\-–]\s*.{5,50}$', '', title).strip() or title
+
+        return title, content
+
+    except Exception as e:
+        config.slack.chat_postMessage(
+            channel=channel_id,
+            text=(
+                f"⚠️ Could not fetch `{url}`\n"
+                f"_{e}_\n\n"
+                f"Tip: open the page in your browser, print it → "
+                f"*Save as PDF*, then paste the PDF into this channel."
+            ),
+        )
+        return None
+
+
 # ── Inner-body extraction for content hashing ────────────────────────────────
 
 # Matches common email metadata header lines that appear inside a forwarded block,
@@ -444,13 +543,41 @@ def _process_message_inner(event: dict):
     else:
         log.info("notes event: no files attached")
 
-    # Extract email content from Slack's email file structure
+    # ── Detect input mode and extract content ────────────────────────────────
+    has_email_file = any(f.get("filetype") == "email" for f in files)
     subject, sender, body, attachment_files = _extract_email_content(files)
 
-    # Fall back to raw message text if no email file was present
-    # (e.g. someone typed directly into the channel for testing)
-    if not body:
-        body = (event.get("text") or "").strip()
+    # source_url is set when content came from a URL fetch.  It is used later
+    # as the hash input so that re-pasting the same URL overwrites the note.
+    source_url: str | None = None
+
+    if not has_email_file:
+        raw_text = (event.get("text") or "").strip()
+        url = _extract_url(raw_text) if raw_text else None
+
+        if url:
+            # ── Mode 2: URL note ──────────────────────────────────────────
+            result = _fetch_url_content(url, channel_id)
+            if result is None:
+                return   # error already posted to channel
+            subject, body = result
+            sender     = url   # URL acts as provenance in the frontmatter
+            source_url = url
+        else:
+            # ── Mode 3: direct file upload (or plain typed text) ──────────
+            if not body:
+                body = raw_text
+            # Use the first attachment's filename as the subject when the
+            # message has no email wrapper (e.g. a PDF saved from the browser).
+            if subject == "Untitled" and attachment_files:
+                raw_name = attachment_files[0].get("name") or ""
+                if raw_name:
+                    subject = Path(raw_name).stem
+    else:
+        # ── Mode 1: forwarded email ───────────────────────────────────────
+        # Edge case: Slack email file present but body was somehow empty.
+        if not body:
+            body = (event.get("text") or "").strip()
 
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
@@ -475,14 +602,16 @@ def _process_message_inner(event: dict):
                 attachment_texts[fname] = f"(download failed: {e})"
         # Unsupported types are listed in frontmatter but not parsed for text
 
-    # ── Fingerprint the source email so we can detect re-sends later ──────────
-    # Hash the *inner* body only (strips the user's forwarding wrapper and
-    # signature so that re-forwarding with a different note or signature still
-    # produces the same hash as the original send).
+    # ── Fingerprint the source so we can detect re-sends / re-pastes later ───
+    # URL notes: hash the URL itself — the page content may change between
+    # fetches but re-pasting the same URL should still overwrite the note.
+    # Email notes: hash the inner body only, stripping the forwarding wrapper
+    # so that re-forwarding with a different cover note gives the same hash.
+    hash_body = source_url if source_url else _extract_inner_body(body)
     source_hash = note_generator.compute_source_hash(
         subject=subject,
         sender=sender,
-        body=_extract_inner_body(body),
+        body=hash_body,
         attachment_names=attachment_names,
     )
 

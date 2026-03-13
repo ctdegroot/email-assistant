@@ -10,3 +10,4 @@ schedule
 pdfplumber
 python-docx
 gitpython
+trafilatura
