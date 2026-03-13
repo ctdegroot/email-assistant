@@ -20,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import config
+from .utils import call_with_retries
 
 
 # ── Output sanitisation ───────────────────────────────────────────────────────
@@ -220,7 +221,10 @@ def generate_note(
 
     # max_tokens is sized to fit a detailed note with fully-expanded attachment
     # sections (a few pages of source material → ~600–800 words of note).
-    response = config.claude.messages.create(
+    # call_with_retries wraps the API call so transient errors (rate limits,
+    # timeouts, 5xx) are automatically retried with exponential back-off.
+    response = call_with_retries(
+        config.claude.messages.create,
         model="claude-sonnet-4-5-20250929",
         max_tokens=3000,
         system=_SYSTEM,

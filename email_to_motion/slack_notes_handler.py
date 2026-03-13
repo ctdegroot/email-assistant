@@ -327,6 +327,35 @@ def process_message(event: dict):
         _processing_ts.discard(ts)
 
 
+# ── Owner DM alerting ─────────────────────────────────────────────────────────
+
+def _dm_owner_on_failure(subject: str, channel_id: str, error: Exception):
+    """
+    Send a direct message to the bot owner (ALLOWED_SLACK_USER_ID) when note
+    generation fails.  This provides a persistent, out-of-channel record of
+    failures so nothing is silently lost.
+
+    Only fires when ALLOWED_SLACK_USER_ID is configured.  Swallows any
+    exceptions so a DM failure never masks the original error.
+    """
+    owner = config.ALLOWED_SLACK_USER_ID
+    if not owner:
+        return
+    try:
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        lines = [
+            "⚠️ *Note generation failed*",
+            f"• Subject: _{subject}_",
+            f"• Channel: <#{channel_id}>",
+            f"• Error: `{type(error).__name__}: {error}`",
+            f"• Time: {now_str}",
+        ]
+        config.slack.chat_postMessage(channel=owner, text="\n".join(lines))
+    except Exception:
+        pass   # non-fatal: DM failure must never obscure the original error
+
+
+
 def _process_message_inner(event: dict):
     """Inner implementation — called only after the dedup guard in process_message()."""
     channel_id = event.get("channel", "")
@@ -388,10 +417,12 @@ def _process_message_inner(event: dict):
             attachment_texts=attachment_texts,
         )
     except Exception as e:
+        log.error("notes: note generation failed for %r: %s", subject, e)
         config.slack.chat_postMessage(
             channel=channel_id,
-            text=f"⚠️ Could not generate note: {e}",
+            text=f"⚠️ Could not generate note for *{subject}*: {e}",
         )
+        _dm_owner_on_failure(subject, channel_id, e)
         return
 
     # ── Write the .md file locally ────────────────────────────────────────────
@@ -399,10 +430,12 @@ def _process_message_inner(event: dict):
     try:
         written_path = note_generator.write_note(markdown, subject, output_dir)
     except Exception as e:
+        log.error("notes: note file write failed for %r: %s", subject, e)
         config.slack.chat_postMessage(
             channel=channel_id,
-            text=f"⚠️ Could not write note file: {e}",
+            text=f"⚠️ Could not write note file for *{subject}*: {e}",
         )
+        _dm_owner_on_failure(subject, channel_id, e)
         return
 
     # ── Optionally push to Obsidian vault via Git ─────────────────────────────

@@ -18,6 +18,7 @@ import io
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
+import anthropic
 import pytest
 
 import email_to_motion.slack_notes_handler as snh
@@ -469,3 +470,149 @@ class TestStartupSweep:
         )
         snh.process_unprocessed_notes()
         assert called == []
+
+
+# ── DM alerting on failure ────────────────────────────────────────────────────
+
+class TestDmAlertOnFailure:
+
+    _OWNER_ID = "U_OWNER_123"
+
+    @pytest.fixture()
+    def env_with_owner(self, notes_env, monkeypatch):
+        """notes_env extended with ALLOWED_SLACK_USER_ID set."""
+        monkeypatch.setattr(config, "ALLOWED_SLACK_USER_ID", self._OWNER_ID)
+        return notes_env
+
+    def test_dm_sent_to_owner_on_generate_failure(self, env_with_owner):
+        """When note generation fails, a DM must be sent to the bot owner."""
+        env_with_owner["claude"].messages.create.side_effect = RuntimeError("Claude down")
+        snh.process_message(_email_event(subject="Important Meeting"))
+
+        # chat_postMessage is called twice: channel warning + owner DM
+        calls = env_with_owner["slack"].chat_postMessage.call_args_list
+        dm_calls = [c for c in calls if c.kwargs.get("channel") == self._OWNER_ID]
+        assert len(dm_calls) == 1, f"Expected 1 DM to owner, got: {dm_calls}"
+
+    def test_dm_contains_subject(self, env_with_owner):
+        env_with_owner["claude"].messages.create.side_effect = RuntimeError("Claude down")
+        snh.process_message(_email_event(subject="Budget Review Q3"))
+
+        calls = env_with_owner["slack"].chat_postMessage.call_args_list
+        dm_text = next(
+            c.kwargs["text"] for c in calls
+            if c.kwargs.get("channel") == self._OWNER_ID
+        )
+        assert "Budget Review Q3" in dm_text
+
+    def test_dm_contains_error_type(self, env_with_owner):
+        env_with_owner["claude"].messages.create.side_effect = RuntimeError("Claude down")
+        snh.process_message(_email_event())
+
+        calls = env_with_owner["slack"].chat_postMessage.call_args_list
+        dm_text = next(
+            c.kwargs["text"] for c in calls
+            if c.kwargs.get("channel") == self._OWNER_ID
+        )
+        assert "RuntimeError" in dm_text
+
+    def test_channel_warning_also_sent(self, env_with_owner):
+        """The channel should still get the ⚠️ warning even when DM is sent."""
+        env_with_owner["claude"].messages.create.side_effect = RuntimeError("Claude down")
+        snh.process_message(_email_event())
+
+        calls = env_with_owner["slack"].chat_postMessage.call_args_list
+        channel_calls = [c for c in calls if c.kwargs.get("channel") == _CHANNEL]
+        assert len(channel_calls) == 1
+        assert "⚠️" in channel_calls[0].kwargs["text"]
+
+    def test_no_dm_when_owner_not_configured(self, notes_env, monkeypatch):
+        """If ALLOWED_SLACK_USER_ID is unset, only the channel warning is posted."""
+        monkeypatch.setattr(config, "ALLOWED_SLACK_USER_ID", "")
+        notes_env["claude"].messages.create.side_effect = RuntimeError("Claude down")
+        snh.process_message(_email_event())
+
+        # Only one call: the channel warning; no DM
+        assert notes_env["slack"].chat_postMessage.call_count == 1
+
+    def test_dm_sent_on_write_failure(self, env_with_owner, monkeypatch):
+        """DM is also sent when file writing fails (not just Claude failures)."""
+        monkeypatch.setattr(
+            "email_to_motion.note_generator.write_note",
+            lambda *a, **kw: (_ for _ in ()).throw(OSError("disk full")),
+        )
+        snh.process_message(_email_event(subject="Write Fail Subject"))
+
+        calls = env_with_owner["slack"].chat_postMessage.call_args_list
+        dm_calls = [c for c in calls if c.kwargs.get("channel") == self._OWNER_ID]
+        assert len(dm_calls) == 1
+        assert "Write Fail Subject" in dm_calls[0].kwargs["text"]
+
+    def test_dm_failure_does_not_suppress_original_error_handling(self, env_with_owner):
+        """A crash inside _dm_owner_on_failure must not prevent the channel warning."""
+        env_with_owner["slack"].chat_postMessage.side_effect = [
+            None,                        # first call: channel warning succeeds
+            RuntimeError("DM failed"),   # second call: DM itself fails
+        ]
+        env_with_owner["claude"].messages.create.side_effect = RuntimeError("Claude down")
+        # Should not raise even if the DM fails
+        snh.process_message(_email_event())
+
+
+# ── Retry integration ─────────────────────────────────────────────────────────
+
+class TestRetryIntegration:
+
+    def test_transient_rate_limit_retried_and_note_created(self, notes_env, monkeypatch):
+        """A RateLimitError on the first attempt should be retried; note written on second."""
+        rate_err = anthropic.RateLimitError("rate limited", response=MagicMock(), body={})
+        claude_resp = MagicMock()
+        claude_resp.content = [MagicMock(text=_BARE_NOTE)]
+        notes_env["claude"].messages.create.side_effect = [rate_err, claude_resp]
+
+        with patch("email_to_motion.utils.time.sleep"):
+            snh.process_message(_email_event())
+
+        assert len(_written_files(notes_env["tmp_path"])) == 1
+
+    def test_transient_timeout_retried_and_note_created(self, notes_env, monkeypatch):
+        timeout_err = anthropic.APITimeoutError(request=MagicMock())
+        claude_resp = MagicMock()
+        claude_resp.content = [MagicMock(text=_BARE_NOTE)]
+        notes_env["claude"].messages.create.side_effect = [timeout_err, claude_resp]
+
+        with patch("email_to_motion.utils.time.sleep"):
+            snh.process_message(_email_event())
+
+        assert len(_written_files(notes_env["tmp_path"])) == 1
+
+    def test_exhausted_retries_posts_channel_warning(self, notes_env, monkeypatch):
+        """After all retries are exhausted the channel must receive a ⚠️ warning."""
+        rate_err = anthropic.RateLimitError("still rate limited", response=MagicMock(), body={})
+        notes_env["claude"].messages.create.side_effect = rate_err
+
+        with patch("email_to_motion.utils.time.sleep"):
+            snh.process_message(_email_event())
+
+        text = notes_env["slack"].chat_postMessage.call_args.kwargs["text"]
+        assert "⚠️" in text
+
+    def test_exhausted_retries_no_note_written(self, notes_env, monkeypatch):
+        rate_err = anthropic.RateLimitError("still rate limited", response=MagicMock(), body={})
+        notes_env["claude"].messages.create.side_effect = rate_err
+
+        with patch("email_to_motion.utils.time.sleep"):
+            snh.process_message(_email_event())
+
+        assert _written_files(notes_env["tmp_path"]) == []
+
+    def test_sleep_called_between_retries(self, notes_env, monkeypatch):
+        """Exponential back-off sleep must be triggered between retry attempts."""
+        rate_err = anthropic.RateLimitError("rate limited", response=MagicMock(), body={})
+        notes_env["claude"].messages.create.side_effect = rate_err
+
+        with patch("email_to_motion.utils.time.sleep") as mock_sleep:
+            snh.process_message(_email_event())
+
+        # 3 retries → 3 sleeps (1s, 2s, 4s)
+        assert mock_sleep.call_count == 3
