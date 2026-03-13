@@ -132,6 +132,7 @@ INSTRUCTIONS:
     subject:     (the subject provided below, verbatim)
     tags:        (a YAML list — see tagging rules below)
     attachments: (a YAML list of attachment filenames, or [] if none)
+    watch_dates: (a YAML list of date-sensitive items — see watch_dates rules below)
 - Then a blank line, then the body in this order:
 
     ## Summary
@@ -157,6 +158,17 @@ INSTRUCTIONS:
     Omit entirely if nothing remains.
 
 - Do not invent information not present in the source material.
+
+WATCH_DATES RULES:
+- Include an entry for every date that requires a future decision or action by the
+  recipient: submission deadlines, application windows, notification dates,
+  decision-by dates, registration close dates, expression-of-interest deadlines, etc.
+- Each entry must have exactly two keys:
+    label: short description (e.g. "LOI deadline", "Registration closes", "Notification date")
+    date:  the date in ISO format YYYY-MM-DD
+- If no such dates are found, write: watch_dates: []
+- Do NOT include routine calendar events (meeting times, class times, scheduled calls).
+  Only include dates that require a future decision or action by the recipient.
 
 TAGGING RULES:
 {tag_instructions}

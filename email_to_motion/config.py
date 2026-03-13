@@ -44,6 +44,10 @@ SLACK_CONFLICT_CHANNEL    = os.environ.get("SLACK_CONFLICT_CHANNEL", "")
 # Leave blank to disable note processing.
 SLACK_NOTES_CHANNEL       = os.environ.get("SLACK_NOTES_CHANNEL", "")
 
+# Reminders channel — channel name (without #) for automated watch-date reminders.
+# Leave blank to disable proactive reminders.
+SLACK_REMINDERS_CHANNEL   = os.environ.get("SLACK_REMINDERS_CHANNEL", "")
+
 # Where to write generated .md note files (always written locally for inspection/backup).
 # Defaults to ~/email_to_motion_notes/. Use an absolute path for a Linux server.
 NOTES_OUTPUT_PATH         = os.environ.get("NOTES_OUTPUT_PATH", "~/email_to_motion_notes")

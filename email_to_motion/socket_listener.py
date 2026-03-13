@@ -14,6 +14,7 @@ Currently registered:
   "Create Task" message shortcut        — open modal → create Motion task
   "Create Calendar Event" shortcut      — open modal → send calendar invite
   #notes-inbox messages                 — generate Obsidian .md note from forwarded email
+  wd_dismiss / wd_snooze / wd_task_*   — watch-date reminder button actions
 """
 
 import re
@@ -31,6 +32,7 @@ from .availability import (
 from . import shortcuts
 from . import conflict_checker
 from . import slack_notes_handler
+from . import watch_date_handler
 from .tasks import process_channel
 from .events import process_calendar_channel
 from .slack_helpers import get_channel_id
@@ -138,7 +140,7 @@ def _dispatch(client: SocketModeClient, req: SocketModeRequest):
             _deny(channel_id, user_id)
             return
 
-        # Button clicks in messages (conflict alerts, etc.)
+        # Button clicks in messages (conflict alerts, watch-date reminders, etc.)
         # trigger_id is present, so modals can be opened directly here.
         if payload_type == "block_actions":
             for action in payload.get("actions", []):
@@ -147,6 +149,15 @@ def _dispatch(client: SocketModeClient, req: SocketModeRequest):
                     conflict_checker.open_resolve_modal(payload, action)
                 elif action_id == "ignore_conflict":
                     conflict_checker.handle_ignore(payload)
+                elif action_id in ("wd_dismiss", "wd_snooze", "wd_task_auto", "wd_task_manual"):
+                    # Heavy work (note file I/O, Motion API) runs in a thread.
+                    # wd_task_auto spawns its own inner thread for Claude + Motion;
+                    # the others are fast but still off the dispatch thread for safety.
+                    threading.Thread(
+                        target=watch_date_handler.handle_watch_date_action,
+                        args=(payload, action),
+                        daemon=True,
+                    ).start()
 
         # Message shortcuts — open a modal immediately.
         # IMPORTANT: views.open must be called within 3 seconds of the trigger,

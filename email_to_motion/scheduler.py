@@ -1,8 +1,10 @@
 """
 scheduler.py — Background job scheduler for recurring tasks.
 
-Runs a weekday morning conflict check at 8:00 AM local time using the
-`schedule` library in a daemon thread so it doesn't block the main loop.
+Jobs (all fire at local system time):
+  - Weekdays 08:00  Conflict check — scans ICS feed for calendar conflicts.
+  - Daily    09:00  Watch-date scan — posts Slack reminders for upcoming note
+                    deadlines (grants, CFPs, decision dates, etc.).
 
 NOTE: Jobs fire at local system time. Ensure the Mac's timezone is set
 to America/Toronto (System Settings → General → Date & Time → Time Zone).
@@ -15,6 +17,7 @@ import schedule
 
 from . import config
 from .conflict_checker import run_morning_check
+from .watch_date_handler import scan_and_remind
 
 
 def _conflict_check_job():
@@ -22,15 +25,23 @@ def _conflict_check_job():
     run_morning_check(channel_id)
 
 
+def _watch_date_job():
+    scan_and_remind()
+
+
 def start():
     """Register all scheduled jobs and launch the background runner thread."""
     for day in ("monday", "tuesday", "wednesday", "thursday", "friday"):
         getattr(schedule.every(), day).at("08:00").do(_conflict_check_job)
 
+    # Watch-date reminders run every day (including weekends) since deadlines
+    # don't stop for weekends.
+    schedule.every().day.at("09:00").do(_watch_date_job)
+
     def _run():
         while True:
             schedule.run_pending()
-            _time.sleep(30)   # check every 30 s — fine-grained enough for an 8am job
+            _time.sleep(30)   # check every 30 s — fine-grained enough for minute-level jobs
 
     threading.Thread(target=_run, daemon=True, name="scheduler").start()
-    print("🗓️  Scheduler started — conflict check runs weekdays at 08:00.")
+    print("🗓️  Scheduler started — conflict check weekdays 08:00, watch-date scan daily 09:00.")
