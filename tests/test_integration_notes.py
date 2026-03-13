@@ -252,8 +252,9 @@ class TestDeduplication:
         notes_env["claude"].messages.create.assert_not_called()
 
     def test_different_ts_both_processed(self, notes_env):
-        snh.process_message(_email_event(ts="1111111111.000001"))
-        snh.process_message(_email_event(ts="2222222222.000002"))
+        # Use distinct bodies so they are treated as different emails
+        snh.process_message(_email_event(ts="1111111111.000001", body="First distinct body"))
+        snh.process_message(_email_event(ts="2222222222.000002", body="Second distinct body"))
         assert len(_written_files(notes_env["tmp_path"])) == 2
 
     def test_ts_removed_from_set_after_success(self, notes_env):
@@ -407,17 +408,17 @@ class TestForwardedEmail:
 class TestFilenameCollision:
 
     def test_second_note_gets_counter_suffix(self, notes_env):
-        """Two notes with the same subject on the same day get (2) appended."""
-        snh.process_message(_email_event(ts="1111111111.000001"))
-        snh.process_message(_email_event(ts="2222222222.000002"))
+        """Two genuinely different emails with the same subject get (2) appended."""
+        snh.process_message(_email_event(ts="1111111111.000001", body="First email — completely different content"))
+        snh.process_message(_email_event(ts="2222222222.000002", body="Second email — completely different content"))
         filenames = [f.name for f in _written_files(notes_env["tmp_path"])]
         assert any("(2)" in n for n in filenames), \
             f"Expected a file with '(2)' in name, got: {filenames}"
         assert any("(2)" not in n for n in filenames)
 
     def test_both_files_have_valid_content(self, notes_env):
-        snh.process_message(_email_event(ts="1111111111.000001"))
-        snh.process_message(_email_event(ts="2222222222.000002"))
+        snh.process_message(_email_event(ts="1111111111.000001", body="First email — completely different content"))
+        snh.process_message(_email_event(ts="2222222222.000002", body="Second email — completely different content"))
         for f in _written_files(notes_env["tmp_path"]):
             assert "## Summary" in f.read_text()
 
@@ -616,3 +617,204 @@ class TestRetryIntegration:
 
         # 3 retries → 3 sleeps (1s, 2s, 4s)
         assert mock_sleep.call_count == 3
+
+
+# ── Note deduplication ────────────────────────────────────────────────────────
+
+class TestNoteDeduplication:
+    """
+    Content-based deduplication: re-forwarding the same email should overwrite
+    the existing note rather than creating a (2) duplicate.  Genuinely different
+    emails with the same subject must still create separate notes.
+    """
+
+    def test_same_email_does_not_create_duplicate_file(self, notes_env):
+        """Re-sending the same email (same content) must not create a second file."""
+        snh.process_message(_email_event(ts="1111111111.000001"))
+        snh.process_message(_email_event(ts="2222222222.000002"))   # same content
+        files = _written_files(notes_env["tmp_path"])
+        assert len(files) == 1, f"Expected 1 note, got: {[f.name for f in files]}"
+
+    def test_same_email_same_output_is_unchanged(self, notes_env):
+        """When Claude produces identical markdown for a re-send, status is 'unchanged'."""
+        snh.process_message(_email_event(ts="1111111111.000001"))
+        snh.process_message(_email_event(ts="2222222222.000002"))   # same content
+        # Second call's confirmation must say "unchanged"
+        calls = notes_env["slack"].chat_postMessage.call_args_list
+        last_text = calls[-1].kwargs["text"]
+        assert "unchanged" in last_text.lower(), f"Expected 'unchanged' in: {last_text!r}"
+
+    def test_same_email_different_output_overwrites(self, notes_env):
+        """If Claude generates different markdown for a re-send, the file is updated in place."""
+        _UPDATED_NOTE = """\
+---
+date: 2026-03-12 10:00
+from: Alice <alice@example.com>
+subject: Test Subject
+tags: [testing, updated]
+attachments: []
+---
+
+## Summary
+An improved summary after code update.
+
+## Key Points
+- Improved point one
+"""
+        # First send
+        snh.process_message(_email_event(ts="1111111111.000001"))
+
+        # Second send: same email content, but Claude now returns different markdown
+        updated_resp = MagicMock()
+        updated_resp.content = [MagicMock(text=_UPDATED_NOTE)]
+        notes_env["claude"].messages.create.return_value = updated_resp
+        snh.process_message(_email_event(ts="2222222222.000002"))
+
+        # Still only one file
+        files = _written_files(notes_env["tmp_path"])
+        assert len(files) == 1, f"Expected 1 note after overwrite, got: {[f.name for f in files]}"
+        # File contains the updated content
+        assert "improved" in files[0].read_text().lower()
+
+    def test_same_email_different_output_status_is_updated(self, notes_env):
+        """Status label in the Slack message must be 'updated' after an overwrite."""
+        _UPDATED_NOTE = """\
+---
+date: 2026-03-12 10:00
+from: Alice <alice@example.com>
+subject: Test Subject
+tags: [testing]
+attachments: []
+---
+
+## Summary
+Updated summary.
+"""
+        snh.process_message(_email_event(ts="1111111111.000001"))
+
+        updated_resp = MagicMock()
+        updated_resp.content = [MagicMock(text=_UPDATED_NOTE)]
+        notes_env["claude"].messages.create.return_value = updated_resp
+        snh.process_message(_email_event(ts="2222222222.000002"))
+
+        calls = notes_env["slack"].chat_postMessage.call_args_list
+        last_text = calls[-1].kwargs["text"]
+        assert "updated" in last_text.lower(), f"Expected 'updated' in: {last_text!r}"
+
+    def test_different_email_same_subject_creates_second_file(self, notes_env):
+        """Two genuinely different emails with the same subject → separate notes."""
+        snh.process_message(_email_event(ts="1111111111.000001", body="Body of first email"))
+        snh.process_message(_email_event(ts="2222222222.000002", body="Body of second email — entirely different"))
+        files = _written_files(notes_env["tmp_path"])
+        assert len(files) == 2, f"Expected 2 notes for different emails, got: {[f.name for f in files]}"
+
+    def test_new_email_status_is_saved(self, notes_env):
+        """A brand-new email must produce status 'saved' in the Slack confirmation."""
+        snh.process_message(_email_event())
+        text = notes_env["slack"].chat_postMessage.call_args.kwargs["text"]
+        assert "saved" in text.lower(), f"Expected 'saved' in: {text!r}"
+
+    def test_source_hash_stored_in_frontmatter(self, notes_env):
+        """The generated note file must contain a source_hash: field in its frontmatter."""
+        snh.process_message(_email_event())
+        content = _written_files(notes_env["tmp_path"])[0].read_text()
+        assert "source_hash:" in content, "source_hash: must be present in frontmatter"
+
+    def test_source_hash_survives_round_trip(self, notes_env):
+        """The hash stored in the file must match what compute_source_hash returns."""
+        import re
+        import email_to_motion.note_generator as ng
+
+        snh.process_message(_email_event(
+            subject="Test Subject",
+            sender="Alice <alice@example.com>",
+            body="Email body here.",
+        ))
+        content = _written_files(notes_env["tmp_path"])[0].read_text()
+        fm = re.search(r'^source_hash:\s*(\S+)', content, re.MULTILINE)
+        assert fm, "source_hash: field not found"
+        stored = fm.group(1)
+        expected = ng.compute_source_hash("Test Subject", "Alice <alice@example.com>",
+                                          "Email body here.", [])
+        assert stored == expected
+
+    def test_forwarded_email_same_hash_despite_different_wrapper(self, notes_env):
+        """
+        The same email re-forwarded with a different note or signature must
+        produce the same source_hash so dedup kicks in.
+
+        The user's forwarding wrapper (text above the divider, including their
+        signature) must be excluded from the hash.
+        """
+        inner_content = (
+            "---------- Forwarded message ---------\n"
+            "From: Original Author <orig@example.com>\n"
+            "Date: Thu, 12 Mar 2026 09:00:00 -0500\n"
+            "Subject: Budget Review Q1\n"
+            "To: Chris <chris@example.com>\n"
+            "\n"
+            "Hi Chris,\n\n"
+            "Please see the attached budget figures.\n\n"
+            "Thanks, Original"
+        )
+        # First send: plain forward with no extra note
+        body_1 = inner_content
+        # Second send: user added "FYI!" at the top and has a different signature
+        body_2 = "FYI!\n\nChris de Groot\nSr. Manager\n\n" + inner_content
+
+        snh.process_message(_email_event(
+            subject="Fwd: Budget Review Q1", body=body_1, ts="1111111111.000001",
+        ))
+        snh.process_message(_email_event(
+            subject="Fwd: Budget Review Q1", body=body_2, ts="2222222222.000002",
+        ))
+
+        files = _written_files(notes_env["tmp_path"])
+        assert len(files) == 1, (
+            f"Same email re-forwarded with different wrapper must NOT create a "
+            f"second file; got: {[f.name for f in files]}"
+        )
+
+    def test_different_forwarded_email_different_hash(self, notes_env):
+        """Two genuinely different emails forwarded with the same wrapper → 2 files."""
+        wrapper = (
+            "FYI\n\n"
+            "---------- Forwarded message ---------\n"
+            "From: Someone <someone@example.com>\n"
+            "Date: Thu, 12 Mar 2026 09:00:00 -0500\n"
+            "Subject: Test Subject\n"
+            "To: Chris <chris@example.com>\n"
+            "\n"
+        )
+        body_1 = wrapper + "First email content — completely unique."
+        body_2 = wrapper + "Second email content — entirely different."
+
+        snh.process_message(_email_event(body=body_1, ts="1111111111.000001"))
+        snh.process_message(_email_event(body=body_2, ts="2222222222.000002"))
+
+        files = _written_files(notes_env["tmp_path"])
+        assert len(files) == 2, (
+            f"Different emails must create separate notes; got: {[f.name for f in files]}"
+        )
+
+    def test_note_from_previous_day_detected_as_duplicate(self, notes_env, monkeypatch):
+        """Same email processed on a later day must still be matched by its hash."""
+        import email_to_motion.note_generator as ng
+
+        # Simulate a note written yesterday by injecting a pre-dated file
+        output_dir = notes_env["tmp_path"]
+        hash_val = ng.compute_source_hash(
+            "Test Subject", "Alice <alice@example.com>", "Email body here.", []
+        )
+        old_content = ng._inject_source_hash(_BARE_NOTE, hash_val)
+        old_file = output_dir / "2026-03-11 - Test Subject.md"
+        old_file.write_text(old_content, encoding="utf-8")
+
+        # Now process the same email "today"
+        snh.process_message(_email_event())
+
+        # Should not have created a new file alongside the old one
+        all_files = _written_files(output_dir)
+        assert len(all_files) == 1, (
+            f"Expected 1 note (old file reused), got: {[f.name for f in all_files]}"
+        )

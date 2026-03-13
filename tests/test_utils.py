@@ -185,3 +185,74 @@ class TestCallWithRetries:
                 call_with_retries(fn, max_retries=0)
         fn.assert_called_once()
         mock_sleep.assert_not_called()
+
+
+# ── _extract_inner_body unit tests ────────────────────────────────────────────
+
+from email_to_motion.slack_notes_handler import _extract_inner_body
+
+
+class TestExtractInnerBody:
+
+    _FWD_BODY = (
+        "---------- Forwarded message ---------\n"
+        "From: orig@example.com\n"
+        "Date: Thu, 12 Mar 2026\n"
+        "Subject: Budget\n"
+        "To: Chris <chris@example.com>\n"
+        "\n"
+        "Inner email content here.\n"
+        "Second paragraph."
+    )
+
+    def test_non_forwarded_body_unchanged(self):
+        body = "Just a plain email body."
+        assert _extract_inner_body(body) == body
+
+    def test_strips_divider_and_headers(self):
+        result = _extract_inner_body(self._FWD_BODY)
+        assert result == "Inner email content here.\nSecond paragraph."
+
+    def test_strips_user_wrapper_above_divider(self):
+        wrapped = "FYI — see below.\n\nChris\n\n" + self._FWD_BODY
+        result = _extract_inner_body(wrapped)
+        assert result == "Inner email content here.\nSecond paragraph."
+
+    def test_different_wrapper_same_inner_gives_same_result(self):
+        wrapper_a = "FYI\n\n" + self._FWD_BODY
+        wrapper_b = "Please review.\n\nThanks, Chris\n\n" + self._FWD_BODY
+        assert _extract_inner_body(wrapper_a) == _extract_inner_body(wrapper_b)
+
+    def test_outlook_style_divider(self):
+        body = (
+            "-----Original Message-----\n"
+            "From: orig@example.com\n"
+            "Subject: Test\n"
+            "\n"
+            "Original body here."
+        )
+        result = _extract_inner_body(body)
+        assert result == "Original body here."
+
+    def test_begin_forwarded_message_divider(self):
+        body = (
+            "Begin forwarded message:\n"
+            "From: orig@example.com\n"
+            "\n"
+            "Content after begin."
+        )
+        result = _extract_inner_body(body)
+        assert result == "Content after begin."
+
+    def test_empty_inner_body(self):
+        body = (
+            "---------- Forwarded message ---------\n"
+            "From: orig@example.com\n"
+        )
+        result = _extract_inner_body(body)
+        assert result == ""
+
+    def test_no_metadata_headers_just_divider(self):
+        body = "---------- Forwarded message ---------\nActual content."
+        result = _extract_inner_body(body)
+        assert result == "Actual content."

@@ -327,6 +327,59 @@ def process_message(event: dict):
         _processing_ts.discard(ts)
 
 
+# ── Inner-body extraction for content hashing ────────────────────────────────
+
+# Matches common email metadata header lines that appear inside a forwarded block,
+# e.g. "From: ...", "Date: ...", "Subject: ...", "To: ...", "Cc: ...", "Reply-To: ..."
+_EMAIL_HEADER_RE = re.compile(r'^[A-Za-z][A-Za-z-]+:\s', re.MULTILINE)
+
+
+def _extract_inner_body(body: str) -> str:
+    """
+    Return only the *original* email content from a (potentially forwarded) body.
+
+    When an email is forwarded, the body typically looks like:
+
+        [User's forwarding note / signature]
+        ---------- Forwarded message ---------
+        From: orig@example.com
+        Date: ...
+        Subject: ...
+        To: ...
+
+        Actual original email content here.
+
+    This function:
+      1. Finds the forwarding divider (same regex as _FWD_MARKER_RE).
+      2. Skips any email-header lines that immediately follow (From:, Date: …).
+      3. Returns the trimmed inner content.
+
+    If no forwarding divider is found the body is returned unchanged — hashing a
+    non-forwarded email body should work as-is.
+
+    Used by compute_source_hash so that differences in the forwarding wrapper
+    (changed signature, extra "FYI" note, etc.) don't affect the duplicate-
+    detection hash.
+    """
+    m = _FWD_MARKER_RE.search(body)
+    if not m:
+        return body.strip()
+
+    # Everything after the divider, split into lines
+    lines = body[m.end():].splitlines()
+
+    # Skip leading blank lines and metadata header lines
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if stripped == "" or _EMAIL_HEADER_RE.match(lines[i]):
+            i += 1
+        else:
+            break
+
+    return "\n".join(lines[i:]).strip()
+
+
 # ── Owner DM alerting ─────────────────────────────────────────────────────────
 
 def _dm_owner_on_failure(subject: str, channel_id: str, error: Exception):
@@ -406,6 +459,17 @@ def _process_message_inner(event: dict):
                 attachment_texts[fname] = f"(download failed: {e})"
         # Unsupported types are listed in frontmatter but not parsed for text
 
+    # ── Fingerprint the source email so we can detect re-sends later ──────────
+    # Hash the *inner* body only (strips the user's forwarding wrapper and
+    # signature so that re-forwarding with a different note or signature still
+    # produces the same hash as the original send).
+    source_hash = note_generator.compute_source_hash(
+        subject=subject,
+        sender=sender,
+        body=_extract_inner_body(body),
+        attachment_names=attachment_names,
+    )
+
     # ── Generate the Markdown note via Claude ─────────────────────────────────
     try:
         markdown = note_generator.generate_note(
@@ -428,7 +492,9 @@ def _process_message_inner(event: dict):
     # ── Write the .md file locally ────────────────────────────────────────────
     output_dir = Path(config.NOTES_OUTPUT_PATH).expanduser().resolve()
     try:
-        written_path = note_generator.write_note(markdown, subject, output_dir)
+        written_path, write_status = note_generator.write_note(
+            markdown, subject, output_dir, source_hash=source_hash,
+        )
     except Exception as e:
         log.error("notes: note file write failed for %r: %s", subject, e)
         config.slack.chat_postMessage(
@@ -472,10 +538,17 @@ def _process_message_inner(event: dict):
     else:
         delivery_line = f"\n  `{written_path}`"
 
+    _STATUS_EMOJI = {
+        "saved":     "📝 Note saved",
+        "updated":   "📝 Note updated",
+        "unchanged": "📝 Note unchanged",
+    }
+    status_label = _STATUS_EMOJI.get(write_status, "📝 Note saved")
+
     config.slack.chat_postMessage(
         channel=channel_id,
         text=(
-            f"📝 Note saved: *{written_path.name}*"
+            f"{status_label}: *{written_path.name}*"
             f"{att_line}"
             f"{delivery_line}"
         ),
