@@ -5,17 +5,25 @@ When an email is forwarded to the channel via Slack's email integration, this
 module:
   1. Extracts the message text (email body) and any file attachments.
   2. Downloads and parses PDF and Word (.docx) attachments for their text.
-  3. Calls note_generator to produce structured Obsidian-flavoured Markdown.
-  4. Writes the .md file to NOTES_OUTPUT_PATH on the local filesystem.
-  5. Posts a confirmation (with filename and path) back to the channel.
+  3. Computes a SHA-256 source hash of the email content for deduplication.
+  4. Calls note_generator to produce structured Obsidian-flavoured Markdown.
+  5. Writes the .md file to NOTES_OUTPUT_PATH (dedup: overwrites if re-send,
+     creates a (2) file if genuinely different email with same subject/date).
+  6. Optionally pushes the note to the Obsidian vault via Git
+     (when OBSIDIAN_DELIVERY=git).
+  7. Posts a confirmation back to the channel — "saved", "updated", or
+     "unchanged" — and marks the original message with ✅.
+
+Error handling:
+  On Claude or file-write failure: posts a ⚠️ warning to the channel and
+  sends a DM to ALLOWED_SLACK_USER_ID (if configured) with details.
+  Transient Claude API errors (rate limits, timeouts) are retried
+  automatically with exponential back-off via call_with_retries().
 
 Supported attachment types:
   - PDF  (.pdf)  — extracted with pdfplumber
   - Word (.docx) — extracted with python-docx
   Other file types are listed in the note frontmatter but not parsed for text.
-
-Stage 1: local file write only.
-Stage 2 (future): also push to Obsidian vault via Git.
 """
 
 import io
@@ -409,6 +417,14 @@ def _dm_owner_on_failure(subject: str, channel_id: str, error: Exception):
 
 
 
+# Maps write_note() status strings to the Slack confirmation label.
+_WRITE_STATUS_LABEL: dict[str, str] = {
+    "saved":     "📝 Note saved",
+    "updated":   "📝 Note updated",
+    "unchanged": "📝 Note unchanged",
+}
+
+
 def _process_message_inner(event: dict):
     """Inner implementation — called only after the dedup guard in process_message()."""
     channel_id = event.get("channel", "")
@@ -538,12 +554,7 @@ def _process_message_inner(event: dict):
     else:
         delivery_line = f"\n  `{written_path}`"
 
-    _STATUS_EMOJI = {
-        "saved":     "📝 Note saved",
-        "updated":   "📝 Note updated",
-        "unchanged": "📝 Note unchanged",
-    }
-    status_label = _STATUS_EMOJI.get(write_status, "📝 Note saved")
+    status_label = _WRITE_STATUS_LABEL.get(write_status, "📝 Note saved")
 
     config.slack.chat_postMessage(
         channel=channel_id,

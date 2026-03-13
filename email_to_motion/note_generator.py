@@ -10,8 +10,17 @@ Tag consistency:
   nothing in the list fits. This makes tags self-consistent over time without
   requiring any upfront taxonomy work.
 
-Stage 1: writes to NOTES_OUTPUT_PATH on the local filesystem for inspection.
-Stage 2 (future): also push to Obsidian vault via Git.
+Deduplication:
+  Each note stores a SHA-256 hash of the source email content in its YAML
+  frontmatter (source_hash:).  write_note() uses this to detect when the same
+  email is re-processed, overwriting the existing note instead of creating a
+  duplicate.  Genuinely different emails that happen to share a subject/date
+  still get separate files with a (2) counter suffix.
+
+Delivery:
+  Notes are always written to NOTES_OUTPUT_PATH on the local filesystem.
+  When OBSIDIAN_DELIVERY=git, vault_writer.push_to_vault() is called
+  afterwards to commit and push the note to the Obsidian vault repository.
 """
 
 import glob as _glob_module
@@ -192,11 +201,10 @@ def generate_note(
     Loads the known-tag vocabulary first so Claude reuses existing tags.
     Returns the raw markdown string (including YAML frontmatter).
 
-    Each attachment's text is capped at 3 000 characters so the prompt
-    stays well within token limits even with large documents.
+    Each attachment's text is capped at 8 000 characters — enough for a
+    detailed multi-page document while staying well within the model's
+    context window.
     """
-    # Each attachment gets up to 8 000 chars — enough for a detailed multi-page
-    # document while staying well within the model's context window.
     att_content_parts = []
     for fname, text in attachment_texts.items():
         cap = 8000
@@ -320,7 +328,7 @@ def write_note(
       file is created (with a ``(2)`` counter if the slug already exists) and
       status ``"saved"`` is returned.
 
-    When ``source_hash`` is ``None`` the legacy behaviour is preserved: a new
+    When ``source_hash`` is ``None`` no deduplication is attempted: a new
     file is always created, with a counter suffix if the name already exists.
 
     Creates output_dir if it doesn't exist.

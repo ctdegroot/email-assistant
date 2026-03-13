@@ -186,10 +186,11 @@ def _dispatch(client: SocketModeClient, req: SocketModeRequest):
                     daemon=True,
                 ).start()
 
-    # ── Channel message events (notes inbox) ──────────────────────────────────
+    # ── Channel message events ────────────────────────────────────────────────
     # Triggered when a message is posted to any channel the bot is in that has
-    # the message.channels / message.groups event subscription enabled.
-    # We filter to SLACK_NOTES_CHANNEL_ID so only the dedicated inbox is handled.
+    # message.channels / message.groups event subscriptions enabled.
+    # Dispatches to the appropriate pipeline based on which channel the message
+    # arrived in: tasks queue, calendar inbox, or notes inbox.
     elif req.type == "events_api":
         event      = req.payload.get("event", {})
         event_type = event.get("type")
