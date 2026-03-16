@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 import anthropic
+import requests as _requests
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +62,62 @@ def call_with_retries(fn, *args, max_retries: int = 3, base_delay: float = 1.0, 
                     max_retries + 1, type(exc).__name__, exc,
                 )
     raise last_exc  # type: ignore[misc]  # always set when loop exits via the except branch
+
+
+# ── Retry logic for transient HTTP errors ────────────────────────────────────
+
+# These exception types indicate a transient network condition — safe to retry.
+_HTTP_RETRYABLE = (
+    _requests.exceptions.Timeout,          # read or connect timed out
+    _requests.exceptions.ConnectionError,  # DNS failure, refused, reset, etc.
+    _requests.exceptions.ChunkedEncodingError,  # connection dropped mid-stream
+)
+
+
+def get_with_retries(
+    url: str,
+    max_retries: int = 3,
+    base_delay: float = 2.0,
+    **kwargs,
+) -> _requests.Response:
+    """
+    GET ``url`` with exponential back-off on transient network errors and
+    HTTP 5xx responses.
+
+    Args:
+        url:         URL to fetch.
+        max_retries: Maximum number of retries (default 3; total attempts = max_retries + 1).
+        base_delay:  Initial back-off in seconds (doubles each retry; default 2.0).
+        **kwargs:    Forwarded verbatim to requests.get (e.g. timeout=30, headers=...).
+
+    Returns the Response on success (2xx or non-5xx).
+    Raises the last exception when all retries are exhausted.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            resp = _requests.get(url, **kwargs)
+            # Retry on server-side errors (5xx); raise immediately on 4xx
+            if resp.status_code >= 500:
+                raise _requests.exceptions.HTTPError(
+                    f"HTTP {resp.status_code}", response=resp
+                )
+            return resp
+        except (*_HTTP_RETRYABLE, _requests.exceptions.HTTPError) as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                delay = base_delay * (2 ** attempt)
+                log.warning(
+                    "HTTP GET transient error (attempt %d/%d): %s — retrying in %.0fs",
+                    attempt + 1, max_retries + 1, exc, delay,
+                )
+                time.sleep(delay)
+            else:
+                log.error(
+                    "HTTP GET failed after %d attempt(s): %s",
+                    max_retries + 1, exc,
+                )
+    raise last_exc  # type: ignore[misc]
 
 
 def parse_claude_json(text: str) -> Any:

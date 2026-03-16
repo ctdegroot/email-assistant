@@ -33,6 +33,7 @@ from icalendar import Calendar
 import recurring_ical_events
 
 from . import config
+from .utils import get_with_retries
 from .availability import (
     TORONTO_TZ, WORK_START, WORK_END,
     fetch_busy_blocks, _build_summary, _to_toronto,
@@ -157,7 +158,7 @@ def find_conflicts(start_date: date, end_date: date) -> list[tuple[dict, dict]]:
     Download the ICS feed and return all (event_a, event_b) pairs whose
     time ranges overlap within the given date window.
     """
-    r = requests.get(config.OUTLOOK_ICS_URL, timeout=15)
+    r = get_with_retries(config.OUTLOOK_ICS_URL, timeout=30)
     r.raise_for_status()
     cal = Calendar.from_ical(r.content)
 
@@ -191,7 +192,7 @@ def debug_events(channel_id: str):
     """
     monday, friday = _current_week_range()
     try:
-        r = requests.get(config.OUTLOOK_ICS_URL, timeout=15)
+        r = get_with_retries(config.OUTLOOK_ICS_URL, timeout=30)
         r.raise_for_status()
         cal = Calendar.from_ical(r.content)
         window_start = datetime.combine(monday, time(0, 0))

@@ -23,6 +23,7 @@ import recurring_ical_events
 from dateutil import parser as dateutil_parser
 from dateutil.relativedelta import relativedelta
 from . import config
+from .utils import get_with_retries
 
 TORONTO_TZ    = pytz.timezone("America/Toronto")
 WORK_START    = time(9, 0)
@@ -141,7 +142,7 @@ def fetch_busy_blocks(
     range to a list of (start, end) busy blocks in Toronto time.
     Recurring events are fully expanded by the recurring_ical_events library.
     """
-    r = requests.get(config.OUTLOOK_ICS_URL, timeout=15)
+    r = get_with_retries(config.OUTLOOK_ICS_URL, timeout=30)
     r.raise_for_status()
     cal = Calendar.from_ical(r.content)
 
