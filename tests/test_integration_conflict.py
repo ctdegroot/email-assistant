@@ -160,6 +160,7 @@ def conflict_env(tmp_path, monkeypatch):
 def _mock_ics_response(ics_bytes: bytes) -> MagicMock:
     """Build a fake requests.Response for an ICS feed."""
     resp = MagicMock()
+    resp.status_code = 200
     resp.content = ics_bytes
     resp.raise_for_status = lambda: None
     return resp
@@ -194,7 +195,7 @@ def _resolve_payload(event_a: dict, event_b: dict, choice: str = "event_a") -> d
 class TestFindConflicts:
 
     def test_overlapping_events_detected(self, conflict_env):
-        with patch("email_to_motion.conflict_checker.requests.get",
+        with patch("email_to_motion.utils._requests.get",
                    return_value=_mock_ics_response(_ICS_TWO_CONFLICTS)):
             conflicts = cc.find_conflicts(date(2026, 3, 16), date(2026, 3, 16))
         assert len(conflicts) == 1
@@ -202,26 +203,26 @@ class TestFindConflicts:
         assert titles == {"Morning Standup", "Budget Review"}
 
     def test_non_overlapping_events_not_reported(self, conflict_env):
-        with patch("email_to_motion.conflict_checker.requests.get",
+        with patch("email_to_motion.utils._requests.get",
                    return_value=_mock_ics_response(_ICS_NO_CONFLICTS)):
             conflicts = cc.find_conflicts(date(2026, 3, 16), date(2026, 3, 16))
         assert conflicts == []
 
     def test_all_day_events_are_skipped(self, conflict_env):
-        with patch("email_to_motion.conflict_checker.requests.get",
+        with patch("email_to_motion.utils._requests.get",
                    return_value=_mock_ics_response(_ICS_ALLDAY)):
             conflicts = cc.find_conflicts(date(2026, 3, 16), date(2026, 3, 16))
         assert conflicts == []
 
     def test_transparent_events_are_skipped(self, conflict_env):
         """TRANSP:TRANSPARENT events (show-as-free) must not trigger conflicts."""
-        with patch("email_to_motion.conflict_checker.requests.get",
+        with patch("email_to_motion.utils._requests.get",
                    return_value=_mock_ics_response(_ICS_TRANSPARENT)):
             conflicts = cc.find_conflicts(date(2026, 3, 16), date(2026, 3, 16))
         assert conflicts == []
 
     def test_attendees_extracted(self, conflict_env):
-        with patch("email_to_motion.conflict_checker.requests.get",
+        with patch("email_to_motion.utils._requests.get",
                    return_value=_mock_ics_response(_ICS_TWO_CONFLICTS)):
             conflicts = cc.find_conflicts(date(2026, 3, 16), date(2026, 3, 16))
         all_attendee_emails = {
@@ -255,7 +256,7 @@ class TestFindConflicts:
             END:VEVENT
             END:VCALENDAR
         """).encode()
-        with patch("email_to_motion.conflict_checker.requests.get",
+        with patch("email_to_motion.utils._requests.get",
                    return_value=_mock_ics_response(ics)):
             conflicts = cc.find_conflicts(date(2026, 3, 16), date(2026, 3, 16))
         attendee_emails = [att["email"] for att in conflicts[0][0]["attendees"]]
