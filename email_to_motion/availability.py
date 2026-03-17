@@ -14,6 +14,7 @@ Pipeline (match mode — /availability <range> [duration] match):
   availability text and Claude returns only mutually available slots.
 """
 
+import json
 import re
 import requests
 import pytz
@@ -23,7 +24,7 @@ import recurring_ical_events
 from dateutil import parser as dateutil_parser
 from dateutil.relativedelta import relativedelta
 from . import config
-from .utils import get_with_retries
+from .utils import call_with_retries, get_with_retries
 
 TORONTO_TZ    = pytz.timezone("America/Toronto")
 WORK_START    = time(9, 0)
@@ -289,7 +290,8 @@ def _build_summary(
 
 
 def _ask_claude(summary: str, duration_minutes: int) -> str:
-    response = config.claude.messages.create(
+    response = call_with_retries(
+        config.claude.messages.create,
         model="claude-sonnet-4-5-20250929",
         max_tokens=512,
         system=SYSTEM_PROMPT,
@@ -335,7 +337,8 @@ closing sentence: \
 
 
 def _ask_claude_match(my_summary: str, their_text: str, duration_minutes: int) -> str:
-    response = config.claude.messages.create(
+    response = call_with_retries(
+        config.claude.messages.create,
         model="claude-sonnet-4-5-20250929",
         max_tokens=600,
         system=MATCH_SYSTEM_PROMPT,
@@ -414,7 +417,6 @@ def open_availability_match_modal(trigger_id: str, channel_id: str, user_id: str
     Open a Slack modal so the user can paste the other person's availability.
     Called directly in _dispatch (not in a thread) because trigger_id expires in 3 s.
     """
-    import json
     metadata = json.dumps({
         "channel_id":       channel_id,
         "user_id":          user_id,
@@ -468,7 +470,6 @@ def handle_availability_match_submit(payload: dict):
     Modal submission handler for availability_match_submit.
     Fetches MY calendar, cross-checks against their pasted text, posts result.
     """
-    import json
     view     = payload["view"]
     metadata = json.loads(view["private_metadata"])
     channel_id       = metadata["channel_id"]

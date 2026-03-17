@@ -12,6 +12,8 @@ Note: this module is named 'events' rather than 'calendar' to avoid shadowing
 Python's standard-library 'calendar' module.
 """
 
+import json
+import logging
 import smtplib
 import uuid
 import pytz
@@ -21,7 +23,9 @@ from email.mime.text import MIMEText
 from icalendar import Calendar, Event as CalEvent
 from . import config
 from .slack_helpers import get_channel_id, get_unprocessed_messages, mark_processed, extract_email_text
-from .utils import parse_claude_json
+from .utils import call_with_retries, parse_claude_json
+
+log = logging.getLogger(__name__)
 
 TORONTO_TZ = pytz.timezone("America/Toronto")
 
@@ -80,7 +84,8 @@ Description rules:
 # ── Claude analysis ───────────────────────────────────────────────────────────
 
 def analyze_email_for_event(email_text: str) -> dict:
-    response = config.claude.messages.create(
+    response = call_with_retries(
+        config.claude.messages.create,
         model="claude-sonnet-4-5-20250929",
         max_tokens=1024,
         system=SYSTEM_PROMPT,
@@ -169,27 +174,24 @@ def process_calendar_channel() -> int:
     messages   = get_unprocessed_messages(channel_id)
 
     if not messages:
-        print("  No unprocessed messages.")
+        log.debug("calendar: no unprocessed messages")
         return 0
 
-    print(f"  Found {len(messages)} unprocessed message(s).")
+    log.info("calendar: found %d unprocessed message(s)", len(messages))
     created = 0
 
     for msg in messages:
         text = extract_email_text(msg)
 
         if len(text) < 20:
-            print(f"  Skipping short message: {text[:40]!r}")
+            log.debug("calendar: skipping short message: %r", text[:40])
             continue
 
-        print(f"\n  ▶ Analyzing: {text[:80]}…")
+        log.info("calendar: analyzing ts=%s — %s…", msg.get("ts"), text[:80])
         try:
             event = analyze_email_for_event(text)
             label = "all-day" if event.get("all_day") else f"{event['start']} → {event['end']}"
-            print(f"    Title:    {event['title']}")
-            print(f"    When:     {label}")
-            if event.get("location"):
-                print(f"    Location: {event['location']}")
+            log.info("calendar: extracted — title=%r when=%s", event.get("title"), label)
 
             ics = create_ics(event)
             send_calendar_invite(event, ics)
@@ -205,15 +207,15 @@ def process_calendar_channel() -> int:
                     + (f"  •  {event['location']}" if event.get("location") else "")
                 ),
             )
-            print("    ✅ Calendar invite sent.")
+            log.info("calendar: invite sent — %r", event.get("title"))
             created += 1
 
         except json.JSONDecodeError as e:
-            print(f"    ✗ Claude returned invalid JSON: {e}")
+            log.error("calendar: Claude returned invalid JSON: %s", e)
         except smtplib.SMTPException as e:
-            print(f"    ✗ SMTP error: {e}")
+            log.error("calendar: SMTP error: %s", e)
         except Exception as e:
-            print(f"    ✗ Unexpected error: {e}")
+            log.error("calendar: unexpected error for ts=%s: %s", msg.get("ts"), e, exc_info=True)
 
-    print(f"\n  Done. Sent {created} calendar invite(s) from {len(messages)} email(s).")
+    log.info("calendar: done — sent %d invite(s) from %d email(s)", created, len(messages))
     return created

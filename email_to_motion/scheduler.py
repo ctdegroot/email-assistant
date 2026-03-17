@@ -10,6 +10,7 @@ NOTE: Jobs fire at local system time. Ensure the Mac's timezone is set
 to America/Toronto (System Settings → General → Date & Time → Time Zone).
 """
 
+import logging
 import threading
 import time as _time
 
@@ -18,6 +19,8 @@ import schedule
 from . import config
 from .conflict_checker import run_morning_check
 from .watch_date_handler import scan_and_remind
+
+log = logging.getLogger(__name__)
 
 
 def _conflict_check_job():
@@ -40,8 +43,12 @@ def start():
 
     def _run():
         while True:
-            schedule.run_pending()
+            try:
+                schedule.run_pending()
+            except Exception:
+                # Log but do not crash the scheduler thread; the next tick will retry.
+                log.exception("scheduler: unhandled exception in scheduled job")
             _time.sleep(30)   # check every 30 s — fine-grained enough for minute-level jobs
 
     threading.Thread(target=_run, daemon=True, name="scheduler").start()
-    print("🗓️  Scheduler started — conflict check weekdays 08:00, watch-date scan daily 09:00.")
+    log.info("scheduler: started — conflict check weekdays 08:00, watch-date scan daily 09:00")

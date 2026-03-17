@@ -9,11 +9,14 @@ Responsibilities:
 """
 
 import json
+import logging
 import requests
 from datetime import date, timedelta
 from . import config
 from .slack_helpers import get_channel_id, get_unprocessed_messages, mark_processed, extract_email_text
-from .utils import parse_claude_json
+from .utils import call_with_retries, parse_claude_json
+
+log = logging.getLogger(__name__)
 
 # ── Channel ID cache ──────────────────────────────────────────────────────────
 # Resolved once on first use to avoid a full paginated Slack API call every poll.
@@ -98,7 +101,8 @@ Duration rules:
 # ── Claude analysis ───────────────────────────────────────────────────────────
 
 def analyze_with_claude(email_text: str) -> list[dict]:
-    response = config.claude.messages.create(
+    response = call_with_retries(
+        config.claude.messages.create,
         model="claude-sonnet-4-5-20250929",
         max_tokens=2048,
         system=SYSTEM_PROMPT,
@@ -172,44 +176,47 @@ def process_channel() -> int:
     messages   = get_unprocessed_messages(channel_id)
 
     if not messages:
-        print("  No unprocessed messages.")
+        log.debug("tasks: no unprocessed messages")
         return 0
 
-    print(f"  Found {len(messages)} unprocessed message(s).")
+    log.info("tasks: found %d unprocessed message(s)", len(messages))
     created = 0
 
     for msg in messages:
         text = extract_email_text(msg)
 
         if len(text) < 20:
-            print(f"  Skipping short message: {text[:40]!r}")
+            log.debug("tasks: skipping short message: %r", text[:40])
             continue
 
-        print(f"\n  ▶ Analyzing: {text[:80]}…")
+        log.info("tasks: analyzing ts=%s — %s…", msg.get("ts"), text[:80])
         try:
             tasks = analyze_with_claude(text)
-            print(f"    Claude identified {len(tasks)} task(s).")
+            log.info("tasks: Claude identified %d task(s)", len(tasks))
             created_tasks = []
             for task in tasks:
-                print(
-                    f"    • {task['name']} "
-                    f"[{task['priority']} · {task['duration']} min · "
-                    f"due {task.get('dueDate') or 'flexible'}]"
+                log.info(
+                    "tasks: creating — %r [%s · %s min · due %s]",
+                    task.get("name"), task.get("priority"),
+                    task.get("duration"), task.get("dueDate") or "flexible",
                 )
                 create_motion_task(task)
                 created_tasks.append(task)
 
             mark_processed(channel_id, msg["ts"])
             _post_confirmation(channel_id, msg["ts"], created_tasks)
-            print(f"    ✅ {len(created_tasks)} Motion task(s) created.")
+            log.info("tasks: %d Motion task(s) created", len(created_tasks))
             created += len(created_tasks)
 
         except json.JSONDecodeError as e:
-            print(f"    ✗ Claude returned invalid JSON: {e}")
+            log.error("tasks: Claude returned invalid JSON: %s", e)
         except requests.HTTPError as e:
-            print(f"    ✗ Motion API error: {e.response.status_code} {e.response.text}")
+            log.error(
+                "tasks: Motion API error %s for ts=%s: %s",
+                e.response.status_code, msg.get("ts"), e.response.text,
+            )
         except Exception as e:
-            print(f"    ✗ Unexpected error: {e}")
+            log.error("tasks: unexpected error for ts=%s: %s", msg.get("ts"), e, exc_info=True)
 
-    print(f"\n  Done. Created {created} Motion task(s) from {len(messages)} email(s).")
+    log.info("tasks: done — created %d task(s) from %d email(s)", created, len(messages))
     return created

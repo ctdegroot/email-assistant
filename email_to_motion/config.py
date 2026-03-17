@@ -104,6 +104,13 @@ def validate():
 
 def init_clients():
     global slack, claude, OWN_BOT_ID
-    slack      = WebClient(token=os.environ["SLACK_BOT_TOKEN"])
-    claude     = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    OWN_BOT_ID = slack.auth_test()["bot_id"]
+    slack  = WebClient(token=os.environ["SLACK_BOT_TOKEN"])
+    claude = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    try:
+        OWN_BOT_ID = slack.auth_test()["bot_id"]
+    except Exception as exc:
+        # Non-fatal at init time: OWN_BOT_ID is used only to filter the bot's
+        # own messages.  A None value disables self-filtering until the Slack
+        # token can be verified, rather than crashing the entire process.
+        print(f"⚠️  Could not retrieve bot ID (auth_test failed): {exc}")
+        OWN_BOT_ID = None

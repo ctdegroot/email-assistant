@@ -43,6 +43,7 @@ import io
 import json
 import logging
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -66,7 +67,11 @@ _channel_id: str = ""
 # Tracks message timestamps currently being processed by the socket listener.
 # The startup sweep checks this set to avoid re-processing a message that the
 # socket thread has already started on (but hasn't yet added the ✅ reaction).
+# Protected by _processing_lock: process_message() and _sweep() run in different
+# threads (socket dispatcher vs. scheduled startup sweep) so mutations must be
+# atomic.
 _processing_ts: set[str] = set()
+_processing_lock = threading.Lock()
 
 
 def init(channel_name: str):
@@ -303,7 +308,9 @@ def process_unprocessed_notes():
         # Without this guard, a message that arrived while the service is running
         # would be processed twice: once in real time via the socket, and again
         # here before the socket thread has had time to add the ✅ reaction.
-        if msg.get("ts") in _processing_ts:
+        with _processing_lock:
+            already_in_flight = msg.get("ts") in _processing_ts
+        if already_in_flight:
             log.info("notes sweep: skipping ts=%s — already in flight", msg.get("ts"))
             continue
         # conversations_history messages don't carry a 'channel' field —
@@ -336,16 +343,18 @@ def process_message(event: dict):
     # process it. Always deregister on exit (success or exception) so the set
     # never grows stale.
     ts = event.get("ts", "")
-    if ts in _processing_ts:
-        log.info("notes: skipping duplicate event ts=%s", ts)
-        return
-    if ts:
-        _processing_ts.add(ts)
+    with _processing_lock:
+        if ts in _processing_ts:
+            log.info("notes: skipping duplicate event ts=%s", ts)
+            return
+        if ts:
+            _processing_ts.add(ts)
 
     try:
         _process_message_inner(event)
     finally:
-        _processing_ts.discard(ts)
+        with _processing_lock:
+            _processing_ts.discard(ts)
 
 
 # ── URL note support ──────────────────────────────────────────────────────────
