@@ -82,6 +82,15 @@ OBSIDIAN_NOTES_SUBFOLDER  = os.environ.get("OBSIDIAN_NOTES_SUBFOLDER", "Notes/In
 
 PROCESSED_EMOJI = "white_check_mark"   # ✅ added to handled messages
 
+# ── Activity log ───────────────────────────────────────────────────────────────
+# JSONL file that records every item processed (tasks, notes, events, etc.).
+# Used for future dashboards and digest reports.  Defaults to a file in the
+# same state directory as known_tags.json and conflict dedup data.
+ACTIVITY_LOG_PATH = os.environ.get(
+    "ACTIVITY_LOG_PATH",
+    "~/.email_to_motion/activity.jsonl",
+)
+
 # ── Shared clients (set by init_clients()) ────────────────────────────────────
 
 slack:      WebClient | None          = None

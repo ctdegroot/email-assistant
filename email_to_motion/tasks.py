@@ -15,6 +15,7 @@ from datetime import date, timedelta
 from . import config
 from .slack_helpers import get_channel_id, get_unprocessed_messages, mark_processed, extract_email_text
 from .utils import call_with_retries, parse_claude_json
+from . import activity_log
 
 log = logging.getLogger(__name__)
 
@@ -201,6 +202,14 @@ def process_channel() -> int:
                     task.get("duration"), task.get("dueDate") or "flexible",
                 )
                 create_motion_task(task)
+                activity_log.record(
+                    "task",
+                    name=task.get("name"),
+                    priority=task.get("priority"),
+                    duration_min=task.get("duration"),
+                    due_date=task.get("dueDate"),
+                    source="email",
+                )
                 created_tasks.append(task)
 
             mark_processed(channel_id, msg["ts"])

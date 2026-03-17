@@ -35,6 +35,7 @@ from pathlib import Path
 
 import yaml
 
+from . import activity_log
 from . import config
 from .tasks import analyze_with_claude, create_motion_task
 
@@ -317,6 +318,13 @@ def scan_and_remind():
                     continue
 
                 _post_reminder(note_path, entry, days_until, reminders_channel_id)
+                activity_log.record(
+                    "reminder_sent",
+                    label=entry.get("label", ""),
+                    date=raw_date,
+                    days_until=days_until,
+                    note_name=note_path.name,
+                )
                 entry['last_reminded'] = today.isoformat()
                 entry['snooze_until']  = None
                 # Clear snoozed status now that the snooze has expired
@@ -387,6 +395,11 @@ def _handle_dismiss(payload: dict, data: dict):
     note_path = _find_note(data['note_name'])
     if note_path:
         _update_entry(note_path, data['date_label'], status='dismissed')
+    activity_log.record(
+        "reminder_dismissed",
+        label=data.get("date_label", ""),
+        note_name=data.get("note_name", ""),
+    )
     _ack_action(payload, f"✅ Dismissed — *{data['date_label']}* will not be surfaced again.")
 
 
@@ -401,6 +414,12 @@ def _handle_snooze(payload: dict, data: dict):
             status='snoozed',
             snooze_until=snooze_date,
         )
+    activity_log.record(
+        "reminder_snoozed",
+        label=data.get("date_label", ""),
+        snooze_days=days,
+        note_name=data.get("note_name", ""),
+    )
     day_word = "day" if days == 1 else "days"
     _ack_action(
         payload,
@@ -436,6 +455,12 @@ def _handle_task_auto(payload: dict, data: dict):
         # Dismiss the watch_date — it has been acted on
         _update_entry(note_path, data['date_label'], status='dismissed')
 
+        activity_log.record(
+            "reminder_task_created",
+            label=data.get("date_label", ""),
+            note_name=data.get("note_name", ""),
+            task_count=len(created),
+        )
         task_list = "\n".join(f"  • {n}" for n in created)
         _ack_action(
             payload,

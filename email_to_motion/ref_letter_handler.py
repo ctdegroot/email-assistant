@@ -60,6 +60,7 @@ from pathlib import Path
 import requests
 import yaml
 
+from . import activity_log
 from . import config
 from .slack_notes_handler import _download_slack_file, _extract_pdf, _extract_docx
 from .slack_helpers import get_channel_id, mark_processed
@@ -593,6 +594,13 @@ def process_message(event: dict):
                 "Tip: ensure `Engineer_Stacked_PurpleGrey.png` is in "
                 f"`{config.REF_LETTER_TEMPLATES_DIR}`."
             )
+
+    activity_log.record(
+        "ref_letter",
+        candidate=candidate_name,
+        letter_type=(data.get("letter") or {}).get("type"),
+        had_pdf=pdf_path is not None,
+    )
 
     try:
         config.slack.files_upload_v2(

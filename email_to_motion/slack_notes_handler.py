@@ -49,6 +49,7 @@ from pathlib import Path
 
 import requests
 
+from . import activity_log
 from . import config
 from . import note_generator
 from . import vault_writer
@@ -560,12 +561,15 @@ def _process_message_inner(event: dict):
     # as the hash input so that re-pasting the same URL overwrites the note.
     source_url: str | None = None
 
+    note_mode = "email" if has_email_file else "file"   # refined below for URL
+
     if not has_email_file:
         raw_text = (event.get("text") or "").strip()
         url = _extract_url(raw_text) if raw_text else None
 
         if url:
             # ── Mode 2: URL note ──────────────────────────────────────────
+            note_mode  = "url"
             result = _fetch_url_content(url, channel_id)
             if result is None:
                 return   # error already posted to channel
@@ -657,6 +661,14 @@ def _process_message_inner(event: dict):
         )
         _dm_owner_on_failure(subject, channel_id, e)
         return
+
+    activity_log.record(
+        "note",
+        subject=subject,
+        mode=note_mode,
+        tags=note_generator._extract_tags_from_markdown(markdown),
+        write_status=write_status,
+    )
 
     # ── Optionally push to Obsidian vault via Git ─────────────────────────────
     vault_path: Path | None = None

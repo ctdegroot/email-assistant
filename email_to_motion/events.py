@@ -24,6 +24,7 @@ from icalendar import Calendar, Event as CalEvent
 from . import config
 from .slack_helpers import get_channel_id, get_unprocessed_messages, mark_processed, extract_email_text
 from .utils import call_with_retries, parse_claude_json
+from . import activity_log
 
 log = logging.getLogger(__name__)
 
@@ -195,6 +196,13 @@ def process_calendar_channel() -> int:
 
             ics = create_ics(event)
             send_calendar_invite(event, ics)
+            activity_log.record(
+                "calendar_event",
+                title=event.get("title"),
+                start=event.get("start"),
+                all_day=event.get("all_day", False),
+                source="email",
+            )
             mark_processed(channel_id, msg["ts"])
 
             config.slack.chat_postMessage(
