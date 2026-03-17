@@ -36,24 +36,98 @@ from .utils import call_with_retries
 
 # ── Output sanitisation ───────────────────────────────────────────────────────
 
-# Claude occasionally wraps its entire response in a code fence despite being
-# told not to, e.g.:
-#   ```markdown
-#   ---
-#   date: ...
-#   ```
-# Obsidian can't parse frontmatter inside backticks, so we strip the fence.
-_FENCE_RE = re.compile(
-    r'^```(?:markdown|yaml|md)?\s*\n(.*?)\n?```\s*$',
-    re.DOTALL,
-)
+# Keys whose scalar values must always be double-quoted to prevent YAML parse
+# errors from special characters: angle brackets in email addresses (<>),
+# colons in subjects ("Re: …"), and bare datetime strings ("2026-03-16 22:49").
+_ALWAYS_QUOTE_KEYS = frozenset({"from", "subject", "date"})
 
 
-def _strip_note_fence(text: str) -> str:
-    """Remove an outer ``` code fence from a note response, if present."""
+def _quote_frontmatter_scalars(fm_text: str) -> str:
+    """Double-quote scalar values for known problematic frontmatter keys.
+
+    Only modifies simple ``key: bare_value`` lines inside the frontmatter
+    block.  Already-quoted values, empty values, and YAML special scalars
+    (``[]``, ``{}``, ``null``, ``true``, ``false``) are left unchanged.
+    """
+    lines = fm_text.split("\n")
+    out = []
+    for line in lines:
+        m = re.match(r'^(\s*(\w+):\s*)(.+)$', line)
+        if m and m.group(2) in _ALWAYS_QUOTE_KEYS:
+            value = m.group(3).strip()
+            if not (
+                value.startswith('"')
+                or value.startswith("'")
+                or value in ("[]", "{}", "~", "null", "true", "false")
+            ):
+                escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+                line = m.group(1) + f'"{escaped}"'
+        out.append(line)
+    return "\n".join(out)
+
+
+def _clean_note_output(text: str) -> str:
+    """Normalise Claude's raw output into valid Obsidian Markdown.
+
+    Handles four failure modes observed in production:
+
+    1. **Full-note fence** — entire output wrapped in ``` ```markdown/yaml/md``` ```.
+       Obsidian cannot parse frontmatter inside backticks.
+
+    2. **Frontmatter-only fence** — Claude wraps just the frontmatter in a
+       ``` ```yaml``` ``` block and appends the body after the closing fence.
+       The full-note regex does not match this because there is content after
+       the closing backticks.
+
+    3. **Unquoted ``from:``** — email addresses like
+       ``Sarah Brooks <sarah.brooks@uwo.ca>`` contain angle brackets that break
+       some YAML parsers (Obsidian renders the frontmatter in red).
+
+    4. **Unquoted ``date:`` / ``subject:``** — bare datetime strings and subjects
+       containing ``:`` can be misinterpreted by strict YAML 1.1 parsers.
+    """
     text = text.strip()
-    m = _FENCE_RE.match(text)
-    return m.group(1).strip() if m else text
+
+    # ── Step 1: strip fence when the ENTIRE note is wrapped ──────────────────
+    full_fence_re = re.compile(
+        r'^```(?:markdown|yaml|md)?\s*\n(.*?)\n?```\s*$',
+        re.DOTALL,
+    )
+    m = full_fence_re.match(text)
+    if m:
+        text = m.group(1).strip()
+
+    # ── Step 2: strip a leading fence when only the frontmatter is fenced ────
+    # Matches:   ```yaml\n<frontmatter>\n```\n\n<body>
+    yaml_fence_re = re.compile(
+        r'^```(?:yaml|YAML|markdown|md)?\s*\n(.*?)\n```\s*\n(.*)',
+        re.DOTALL,
+    )
+    m = yaml_fence_re.match(text)
+    if m:
+        inner = m.group(1).strip()
+        body  = m.group(2).strip()
+        if inner.startswith("---"):
+            # Inner block already has --- delimiters; just reunite with body
+            text = inner + ("\n\n" + body if body else "")
+        else:
+            text = (f"---\n{inner}\n---\n\n{body}" if body
+                    else f"---\n{inner}\n---")
+
+    # ── Step 3: quote problematic scalar values in the frontmatter ───────────
+    fm_re = re.compile(r'^(---\s*\n)(.*?)(\n---)', re.DOTALL)
+    m = fm_re.match(text)
+    if m:
+        quoted_fm = _quote_frontmatter_scalars(m.group(2))
+        text = m.group(1) + quoted_fm + m.group(3) + text[m.end():]
+
+    return text
+
+
+# Legacy alias so any external callers / existing test imports keep working.
+def _strip_note_fence(text: str) -> str:
+    """Deprecated: use _clean_note_output instead."""
+    return _clean_note_output(text)
 
 
 # ── Canonical tag store ───────────────────────────────────────────────────────
@@ -119,17 +193,25 @@ _SYSTEM = (
     "Your job is to convert forwarded email content into a clean, structured Markdown note "
     "suitable for a personal knowledge base (Obsidian). "
     "Extract the core information — do not pad, repeat, or editorialize. "
-    "Output ONLY the Markdown note — no commentary before or after it."
+    "Output ONLY the Markdown note — no commentary before or after it. "
+    "Do NOT wrap your output in a code fence or backticks of any kind."
 )
 
 _TEMPLATE = """\
 Convert the following email (and any attachments) into an Obsidian Markdown note.
 
 INSTRUCTIONS:
-- Start with YAML frontmatter containing exactly these keys:
-    date:        (the date provided below, verbatim)
-    from:        (the sender provided below, verbatim)
-    subject:     (the subject provided below, verbatim)
+- Start with YAML frontmatter: a line containing only "---", then the keys below,
+  then a line containing only "---". Do NOT wrap it in a code fence (no backticks).
+- Use double quotes around the values for date, from, and subject to prevent YAML
+  parse errors from special characters (angle brackets, colons, etc.). Example:
+    date:    "2026-03-16 22:49"
+    from:    "Sarah Brooks <sarah.brooks@uwo.ca>"
+    subject: "Re: Important Update"
+- The frontmatter must contain exactly these keys:
+    date:        (the date provided below, verbatim, double-quoted)
+    from:        (the sender provided below, verbatim, double-quoted)
+    subject:     (the subject provided below, verbatim, double-quoted)
     tags:        (a YAML list — see tagging rules below)
     attachments: (a YAML list of attachment filenames, or [] if none)
     watch_dates: (a YAML list of date-sensitive items — see watch_dates rules below)
@@ -252,7 +334,7 @@ def generate_note(
         system=_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )
-    markdown = _strip_note_fence(response.content[0].text)
+    markdown = _clean_note_output(response.content[0].text)
 
     # Update the canonical tag store with any tags used in this note
     _save_known_tags(_extract_tags_from_markdown(markdown))
