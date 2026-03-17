@@ -11,9 +11,11 @@ so this integrates cleanly with the existing synchronous polling loop.
 Currently registered:
   /availability <date range> [minutes]  — check calendar availability
   /conflict-check [force | debug]       — check for calendar conflicts
+  /get-template                         — upload blank ref-letter YAML template
   "Create Task" message shortcut        — open modal → create Motion task
   "Create Calendar Event" shortcut      — open modal → send calendar invite
   #notes-inbox messages                 — generate Obsidian .md note from forwarded email
+  #ref-letters messages (with YAML)     — generate reference letter PDF + .tex zip
   wd_dismiss / wd_snooze / wd_task_*   — watch-date reminder button actions
 """
 
@@ -33,6 +35,7 @@ from . import shortcuts
 from . import conflict_checker
 from . import slack_notes_handler
 from . import watch_date_handler
+from . import ref_letter_handler
 from .tasks import process_channel
 from .events import process_calendar_channel
 from .slack_helpers import get_channel_id
@@ -98,6 +101,14 @@ def _dispatch(client: SocketModeClient, req: SocketModeRequest):
                     kwargs={"verbose": True, "force": force},
                     daemon=True,
                 ).start()
+
+        elif command == "/get-template":
+            # Send the ref-letter YAML template to the channel where the command was run.
+            threading.Thread(
+                target=ref_letter_handler.send_template,
+                args=(channel_id,),
+                daemon=True,
+            ).start()
 
         elif command == "/availability":
             if not text:
@@ -224,6 +235,12 @@ def _dispatch(client: SocketModeClient, req: SocketModeRequest):
                     args=(event,),
                     daemon=True,
                 ).start()
+            elif ref_letter_handler._channel_id and channel == ref_letter_handler._channel_id:
+                threading.Thread(
+                    target=ref_letter_handler.process_message,
+                    args=(event,),
+                    daemon=True,
+                ).start()
 
 
 def start(app_token: str) -> SocketModeClient:
@@ -251,14 +268,21 @@ def start(app_token: str) -> SocketModeClient:
             print(f"⚠️  Could not resolve channel '{name}': {e}")
 
     slack_notes_handler.init(config.SLACK_NOTES_CHANNEL)
+    ref_letter_handler.init(config.SLACK_REFLETTER_CHANNEL)
+
     notes_status = (
         f"notes-inbox #{config.SLACK_NOTES_CHANNEL} ({slack_notes_handler._channel_id})"
         if slack_notes_handler._channel_id
         else "notes-inbox disabled"
     )
+    refletter_status = (
+        f"ref-letters #{config.SLACK_REFLETTER_CHANNEL} ({ref_letter_handler._channel_id})"
+        if ref_letter_handler._channel_id
+        else "ref-letters disabled"
+    )
     print(
         f"🔌  Socket Mode connected — "
         f"/availability, /conflict-check, Create Task, Create Calendar Event, "
-        f"{notes_status} active."
+        f"{notes_status}, {refletter_status} active."
     )
     return client

@@ -48,6 +48,21 @@ SLACK_NOTES_CHANNEL       = os.environ.get("SLACK_NOTES_CHANNEL", "")
 # Leave blank to disable proactive reminders.
 SLACK_REMINDERS_CHANNEL   = os.environ.get("SLACK_REMINDERS_CHANNEL", "")
 
+# Reference letter generator — channel name (without #) for YAML-driven letter generation.
+# Leave blank to disable.
+SLACK_REFLETTER_CHANNEL   = os.environ.get("SLACK_REFLETTER_CHANNEL", "")
+
+# Directory containing LaTeX template support files (WesternLetter.cls, Signature.pdf,
+# Engineer_Stacked_PurpleGrey.png, etc.).  Defaults to ref_letter_templates/ inside the
+# project directory.  Use an absolute path if running from a different working directory.
+REF_LETTER_TEMPLATES_DIR  = os.environ.get(
+    "REF_LETTER_TEMPLATES_DIR",
+    str(__import__("pathlib").Path(__file__).parent.parent / "ref_letter_templates"),
+)
+
+# Where to write generated reference letter files (.tex, .pdf, .zip).
+REF_LETTERS_OUTPUT_PATH   = os.environ.get("REF_LETTERS_OUTPUT_PATH", "~/email_to_motion_ref_letters")
+
 # Where to write generated .md note files (always written locally for inspection/backup).
 # Defaults to ~/email_to_motion_notes/. Use an absolute path for a Linux server.
 NOTES_OUTPUT_PATH         = os.environ.get("NOTES_OUTPUT_PATH", "~/email_to_motion_notes")

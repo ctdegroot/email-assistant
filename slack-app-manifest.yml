@@ -30,6 +30,10 @@ features:
       usage_hint: "[force | debug]"
       should_escape: false
 
+    - command: /get-template
+      description: Upload the blank ref-letter YAML template to this channel
+      should_escape: false
+
   shortcuts:
     - name: Create Task
       type: message
@@ -53,6 +57,7 @@ oauth_config:
       - chat:write          # Post messages and ephemeral replies
       - reactions:write     # Mark processed messages with ✅
       - files:read          # Download email attachment content
+      - files:write         # Upload generated files (ref-letter zip, YAML template)
       - im:write            # Open DMs (fallback when bot is not in a channel)
 
 settings:

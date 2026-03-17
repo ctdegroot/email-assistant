@@ -1,0 +1,45 @@
+# Reference letter context template
+# Upload this file (filled in) to #ref-letters to generate a letter.
+# Optionally attach a CV/résumé PDF or Word doc alongside it.
+# Only candidate.name is required — all other fields are optional.
+
+candidate:
+  name:               # Full name, e.g. Jane Smith
+  role:               # How you know them, e.g. MASc student | undergraduate RA | course student
+  degree_completed:   # e.g. MASc, Mechanical Engineering, Western University, 2024
+  target_program:     # e.g. PhD in Mechanical Engineering
+  target_institution: # e.g. MIT
+  relationship:       # e.g. Supervised Jane's MASc thesis at Western (2022–2024)
+  duration_known:     # e.g. 2 years
+  context: >
+    Brief narrative of your experience with this person — role on a project,
+    key contributions, anything that gives Claude useful background.
+
+letter:
+  type: phd-application   # phd-application | postdoc | faculty | fellowship | employment | award
+  deadline:               # YYYY-MM-DD — optional, creates a watch-date reminder
+  addressee:              # e.g. Graduate Admissions Committee  or  Prof. John Smith
+
+strengths:
+  - label:   # e.g. Research Independence
+    detail: > # Supporting evidence — specific observations, not generic praise
+  - label:
+    detail: >
+  - label:
+    detail: >
+
+specific_examples:
+  - >
+    Concrete anecdote #1 — the more specific the better.
+  - >
+    Concrete anecdote #2.
+
+areas_to_emphasize:
+  - # e.g. Readiness for PhD-level independent research
+  - # e.g. Technical depth in CFD and numerical methods
+
+tone:      # Optional — e.g. "particularly warm; strongest student I have supervised"
+           # Leave null for standard professional tone.
+
+weaknesses: # Optional — e.g. "Took time to build confidence presenting, but noticeably improved"
+            # Leave null if not applicable.
