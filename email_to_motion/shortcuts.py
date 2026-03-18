@@ -25,7 +25,7 @@ import requests
 from . import config
 from .slack_helpers import extract_email_text
 from .tasks import analyze_with_claude, create_motion_task
-from .events import analyze_email_for_event, create_ics, send_calendar_invite
+from .events import analyze_email_for_events, create_ics, send_calendar_invite
 
 # How many messages to fetch on each side of the selected message.
 _CONTEXT_COUNT = 5
@@ -349,7 +349,7 @@ def handle_create_event_submit(payload: dict):
         return
 
     try:
-        event = analyze_email_for_event(text)
+        extracted_events = analyze_email_for_events(text)
     except json.JSONDecodeError as e:
         _respond(channel_id, user_id, f"⚠️ Claude returned invalid JSON: {e}")
         return
@@ -357,18 +357,24 @@ def handle_create_event_submit(payload: dict):
         _respond(channel_id, user_id, f"⚠️ Claude error: {e}")
         return
 
-    try:
-        ics = create_ics(event)
-        send_calendar_invite(event, ics)
-    except smtplib.SMTPException as e:
-        _respond(channel_id, user_id, f"⚠️ Could not send calendar invite: {e}")
-        return
-    except Exception as e:
-        _respond(channel_id, user_id, f"⚠️ Error creating calendar event: {e}")
-        return
+    sent_lines = []
+    for event in extracted_events:
+        try:
+            ics = create_ics(event)
+            send_calendar_invite(event, ics)
+        except smtplib.SMTPException as e:
+            _respond(channel_id, user_id, f"⚠️ Could not send calendar invite for '{event.get('title')}': {e}")
+            return
+        except Exception as e:
+            _respond(channel_id, user_id, f"⚠️ Error creating calendar event '{event.get('title')}': {e}")
+            return
 
-    label = "all-day" if event.get("all_day") else f"{event['start']} → {event['end']}"
-    lines = ["📅 *Calendar invite sent*", f"• *{event['title']}*", f"• {label}"]
-    if event.get("location"):
-        lines.append(f"• {event['location']}")
+        label = "all-day" if event.get("all_day") else f"{event['start']} → {event['end']}"
+        line = f"• *{event['title']}* — {label}"
+        if event.get("location"):
+            line += f"  •  {event['location']}"
+        sent_lines.append(line)
+
+    n = len(extracted_events)
+    lines = [f"📅 *{n} calendar invite{'s' if n > 1 else ''} sent*"] + sent_lines
     _respond(channel_id, user_id, "\n".join(lines))

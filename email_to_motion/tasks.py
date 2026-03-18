@@ -37,7 +37,8 @@ SYSTEM_PROMPT = (
     "and include headers), identify all clearly distinct actions the recipient needs "
     "to take and return ONLY a JSON array of task objects — no markdown, no explanation. "
     "Default to one task, but split into multiple when actions are independent in nature, "
-    "have different deadlines, or would naturally be done in separate sessions."
+    "have different deadlines, or would naturally be done in separate sessions. "
+    "If there are no actionable tasks to create, return an empty JSON array: []"
 )
 
 USER_PROMPT_TEMPLATE = """\
@@ -46,7 +47,7 @@ Analyze this email and extract task metadata.
 EMAIL:
 {email_text}
 
-Return a JSON array of one or more task objects. Each task has exactly these keys \
+Return a JSON array of zero or more task objects. Each task has exactly these keys \
 (no extras, no markdown fences around the array):
 [
   {{
@@ -58,6 +59,22 @@ Return a JSON array of one or more task objects. Each task has exactly these key
     "deadlineType": "<HARD|SOFT|NONE>"
   }}
 ]
+
+IMPORTANT — Forwarding note:
+  If the email begins with a note from the person who forwarded it (before any "From:",
+  "Fwd:", or "------" separator), treat that note as explicit routing instructions:
+  - If the note says anything like "nothing to go to motion for this", "no motion task",
+    "just calendar", or otherwise indicates a particular item should NOT become a Motion
+    task, exclude that item. Do not create a task for it.
+  - Only items that the note explicitly (or clearly implicitly) asks to be created as
+    Motion tasks should appear in the output.
+  - When the note is silent about an item, use your judgement based on whether it is a
+    genuine actionable task vs. a calendar event.
+
+NEVER create tasks for:
+  - Blocking calendar time / placing a calendar hold — these are calendar events, not tasks.
+  - Attending an event, meeting, lecture, or exam — these belong in the calendar.
+  - Items the forwarding note explicitly says should not go to Motion.
 
 Task-splitting rules:
   - Default to ONE task. Only create multiple tasks when the email contains actions that
@@ -194,6 +211,18 @@ def process_channel() -> int:
         try:
             tasks = analyze_with_claude(text)
             log.info("tasks: Claude identified %d task(s)", len(tasks))
+
+            if not tasks:
+                # Forwarding note instructed no Motion tasks for this message
+                log.info("tasks: no tasks to create — marking processed")
+                mark_processed(channel_id, msg["ts"])
+                config.slack.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=msg["ts"],
+                    text="ℹ️ No Motion tasks created for this message.",
+                )
+                continue
+
             created_tasks = []
             for task in tasks:
                 log.info(
