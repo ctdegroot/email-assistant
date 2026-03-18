@@ -14,7 +14,7 @@ import requests
 from datetime import date, timedelta
 from . import config
 from .slack_helpers import get_channel_id, get_unprocessed_messages, mark_processed, extract_email_text
-from .utils import call_with_retries, parse_claude_json
+from .utils import call_with_retries, parse_claude_json, post_with_retries
 from . import activity_log
 
 log = logging.getLogger(__name__)
@@ -168,7 +168,12 @@ def create_motion_task(task: dict) -> dict:
             "schedule":     "Work Hours",
         },
     }
-    r = requests.post(f"{MOTION_BASE}/tasks", headers=_motion_headers(), json=payload, timeout=10)
+    r = post_with_retries(
+        f"{MOTION_BASE}/tasks",
+        headers=_motion_headers(),
+        json=payload,
+        timeout=10,
+    )
     r.raise_for_status()
     return r.json()
 

@@ -5,15 +5,22 @@ Covers: channel lookup, message fetching, processed-emoji marking,
 attachment downloading, and email content extraction.
 """
 
+import logging
 import requests
 from slack_sdk.errors import SlackApiError
 from . import config
+
+log = logging.getLogger(__name__)
+
+# Maximum pages to iterate when listing channels, as a safety guard against
+# a pagination cursor that never clears due to a Slack API quirk.
+_MAX_CHANNEL_LIST_PAGES = 20
 
 
 def get_channel_id(name: str) -> str:
     """Return the Slack channel ID for the given channel name."""
     cursor = None
-    while True:
+    for _ in range(_MAX_CHANNEL_LIST_PAGES):
         kwargs = dict(types="public_channel,private_channel", limit=200)
         if cursor:
             kwargs["cursor"] = cursor
@@ -24,6 +31,11 @@ def get_channel_id(name: str) -> str:
         cursor = result.get("response_metadata", {}).get("next_cursor")
         if not cursor:
             break
+    else:
+        log.warning(
+            "get_channel_id: reached page limit (%d) while searching for '#%s'",
+            _MAX_CHANNEL_LIST_PAGES, name,
+        )
     raise ValueError(
         f"Channel '#{name}' not found. "
         "Create it in Slack and invite your bot with /invite @BotName, then try again."
@@ -32,7 +44,11 @@ def get_channel_id(name: str) -> str:
 
 def get_unprocessed_messages(channel_id: str) -> list:
     """Return messages in the channel that have not yet been marked with ✅."""
-    result = config.slack.conversations_history(channel=channel_id, limit=50)
+    try:
+        result = config.slack.conversations_history(channel=channel_id, limit=50)
+    except SlackApiError as e:
+        log.error("get_unprocessed_messages: Slack API error for channel %s: %s", channel_id, e)
+        return []
     out = []
     for msg in result.get("messages", []):
         if msg.get("subtype"):

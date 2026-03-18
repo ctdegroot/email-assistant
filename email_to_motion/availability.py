@@ -365,7 +365,9 @@ def _parse_availability_args(text: str) -> tuple[str, int]:
     duration_minutes = 30
     m = re.search(r'\s+(\d+)\s*$', text)
     if m:
-        duration_minutes = int(m.group(1))
+        raw = int(m.group(1))
+        # Clamp to a sensible range: 15 min minimum, 8 hours maximum
+        duration_minutes = max(15, min(raw, 480))
         text = text[:m.start()].strip()
     return text, duration_minutes
 

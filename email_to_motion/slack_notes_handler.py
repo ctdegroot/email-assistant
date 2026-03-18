@@ -54,6 +54,7 @@ from . import config
 from . import note_generator
 from . import vault_writer
 from .slack_helpers import get_channel_id, get_unprocessed_messages, mark_processed
+from .utils import get_with_retries
 
 log = logging.getLogger(__name__)
 
@@ -96,8 +97,9 @@ def init(channel_name: str):
 # ── Attachment extraction ─────────────────────────────────────────────────────
 
 def _download_slack_file(url: str) -> bytes:
-    """Download a private Slack file, authenticating with the bot token."""
-    resp = requests.get(
+    """Download a private Slack file, authenticating with the bot token.
+    Retries automatically on transient network errors and 5xx responses."""
+    resp = get_with_retries(
         url,
         headers={"Authorization": f"Bearer {config.SLACK_BOT_TOKEN}"},
         timeout=30,

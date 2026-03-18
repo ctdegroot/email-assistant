@@ -33,7 +33,7 @@ from icalendar import Calendar
 import recurring_ical_events
 
 from . import config
-from .utils import get_with_retries
+from .utils import call_with_retries, get_with_retries
 from .availability import (
     TORONTO_TZ, WORK_START, WORK_END,
     fetch_busy_blocks, _build_summary, _to_toronto,
@@ -667,7 +667,8 @@ def _draft_email_with_claude(
     event_staying: dict,
     availability: str,
 ) -> str:
-    response = config.claude.messages.create(
+    response = call_with_retries(
+        config.claude.messages.create,
         model="claude-sonnet-4-5-20250929",
         max_tokens=700,
         system=_EMAIL_SYSTEM,

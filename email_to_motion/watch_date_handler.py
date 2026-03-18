@@ -443,6 +443,14 @@ def _handle_task_auto(payload: dict, data: dict):
             f"Key deadline to use as the due date: {data['date_label']} — {data['date']}"
         )
         tasks = analyze_with_claude(task_input)
+        if not tasks:
+            _ack_action(
+                payload,
+                f"⚠️ Claude could not identify any tasks in *{data['note_name']}*. "
+                "Use *Create Task (Manual)* to add one yourself.",
+            )
+            return
+
         # Override dueDate with the watched deadline
         for task in tasks:
             task['dueDate'] = data['date']
