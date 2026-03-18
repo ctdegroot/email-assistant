@@ -48,6 +48,7 @@ Template support files (place in REF_LETTER_TEMPLATES_DIR):
 """
 
 import io
+import json
 import logging
 import re
 import shutil
@@ -71,6 +72,10 @@ log = logging.getLogger(__name__)
 # ── Channel ID resolution ─────────────────────────────────────────────────────
 
 _channel_id: str = ""
+
+# Maps the original message ts (= thread_ts of any reply) to partial context
+# captured from the CV.  Entry is removed once the thread reply is processed.
+_pending: dict[str, dict] = {}
 
 
 def init(channel_name: str):
@@ -127,11 +132,22 @@ _TYPE_LABELS = {
 }
 
 
+def _type_label(letter_type: str) -> str:
+    """
+    Return a human-readable label for the letter type.
+    Known types are mapped via _TYPE_LABELS; any other non-empty string is
+    title-cased and used directly so custom types (e.g. "undergraduate transfer
+    application") work without requiring code changes.
+    """
+    if not letter_type:
+        return "Application"
+    return _TYPE_LABELS.get(letter_type) or letter_type.replace("-", " ").title()
+
+
 def _re_line(data: dict) -> str:
     name        = data.get("candidate", {}).get("name", "Applicant")
-    letter_type = data.get("letter", {}).get("type", "")
-    type_label  = _TYPE_LABELS.get(letter_type, "Application")
-    return _latex_escape(f"Letter of Support for {name} — {type_label}")
+    letter_type = (data.get("letter") or {}).get("type", "")
+    return _latex_escape(f"Letter of Support for {name} — {_type_label(letter_type)}")
 
 
 def _salutation(data: dict) -> str:
@@ -157,8 +173,21 @@ def _build_system_prompt() -> str:
     parts.append(", ".join(identity_parts) + "." if identity_parts else "the letter author.")
     parts += [
         "Write in first person, using a professional academic tone.",
-        "Avoid generic superlatives — every positive claim must be grounded in a"
-        " specific observation, example, or outcome.",
+        "CRITICAL — factual accuracy: every specific claim (anecdote, interaction, exam result,"
+        " conversation, grade, module name, assignment outcome) must be drawn directly from the"
+        " context provided. Do NOT invent details that are not explicitly stated."
+        " If the context is limited, write in honest general terms rather than fabricating"
+        " supporting specifics. A shorter, truthful letter is far better than a longer one"
+        " with invented content.",
+        "CRITICAL — do not over-elaborate vague statements: if a quality is described only in"
+        " general terms (e.g. 'active in class', 'contributes well'), reflect it in one concise"
+        " sentence. Do NOT expand it into detailed specific observations, anecdotes, or inferred"
+        " motivations that were not provided.",
+        "CRITICAL — professional register: the context fields contain the letter-writer's working"
+        " notes, which may use informal language. Never use informal phrases verbatim in the"
+        " letter. Translate them into appropriate professional language"
+        " (e.g. 'decent grades' → 'reasonable academic standing'; 'not fantastic' → omit or"
+        " soften to 'solid but not exceptional').",
         "Return ONLY the body paragraphs of the letter (no salutation, no date,"
         " no 'Sincerely', no LaTeX markup, no markdown).",
         "Separate paragraphs with a single blank line.",
@@ -189,7 +218,10 @@ def _build_prompt(data: dict, cv_text: str) -> str:
     if cand.get("context"):
         lines.append(f"  Context:\n    {cand['context'].strip()}")
 
-    lines.append(f"\nLETTER TYPE: {_TYPE_LABELS.get(letter.get('type', ''), 'Application')}")
+    if data.get("course_info"):
+        lines.append(f"\nCOURSE INFORMATION (use these real details; do not invent additional ones):\n  {str(data['course_info']).strip()}")
+
+    lines.append(f"\nLETTER TYPE: {_type_label(letter.get('type', ''))}")
     if letter.get("addressee"):
         lines.append(f"ADDRESSEE: {letter['addressee']}")
 
@@ -207,7 +239,11 @@ def _build_prompt(data: dict, cv_text: str) -> str:
 
     emphasize = data.get("areas_to_emphasize") or []
     if emphasize:
-        lines.append("\nAREAS TO EMPHASIZE:")
+        lines.append(
+            "\nDIRECTIVES (follow these instructions exactly when writing the letter;"
+            " if a directive says to draw from the CV, you MUST name specific items"
+            " from the CV text provided below — do not write vaguely about 'various activities'):"
+        )
         for a in emphasize:
             lines.append(f"  • {a}")
 
@@ -220,14 +256,32 @@ def _build_prompt(data: dict, cv_text: str) -> str:
         lines.append(f"\nWEAKNESS TO ADDRESS (briefly and positively): {weakness}")
 
     if cv_text:
-        lines.append(f"\nCANDIDATE CV / RÉSUMÉ (use for additional supporting detail):\n{cv_text[:4000]}")
+        lines.append(
+            f"\nCANDIDATE CV / RÉSUMÉ (mine this for specific named achievements, awards,"
+            f" projects, and activities when directives above request CV details):\n{cv_text[:4000]}"
+        )
+
+    # Detect limited-contact scenarios and warn Claude explicitly
+    tone = str(data.get("tone") or "").lower()
+    limited_contact_signals = ("generic", "limited", "one course", "one semester",
+                               "one term", "brief", "only class", "only course")
+    if any(s in tone for s in limited_contact_signals):
+        lines.append(
+            "\nIMPORTANT — LIMITED CONTACT: The letter writer has explicitly flagged this as"
+            " a generic letter based on limited personal contact (e.g. one course/term)."
+            " Do NOT invent specific anecdotes, one-on-one interactions, office-hour visits,"
+            " or detailed performance observations that were not provided above."
+            " Write honestly in general terms consistent with a class instructor's perspective."
+            " The closing endorsement should be supportive but appropriately measured — do not"
+            " write 'without reservation' or similar strong phrases unless explicitly instructed."
+        )
 
     lines.append(
-        "\nWrite 3–5 substantive paragraphs that: "
+        "\nWrite 3–5 paragraphs that: "
         "(1) open by establishing your relationship and overall endorsement, "
-        "(2) cover each strength with grounded specific evidence, "
-        "(3) weave in the specific examples naturally, "
-        "(4) close with a concrete endorsement suited to the letter type."
+        "(2) cover each strength using only details drawn from the context above, "
+        "(3) weave in specific examples if provided — do not invent them, "
+        "(4) close with an endorsement calibrated to the tone guidance above."
     )
 
     return "\n".join(lines)
@@ -499,6 +553,392 @@ def send_template(channel_id: str):
     )
 
 
+# ── CV-based YAML pre-fill ────────────────────────────────────────────────────
+
+_PREFILL_SYSTEM = (
+    "You extract structured information about an applicant from their CV/resume "
+    "and any context provided in a message. Return only valid JSON — no prose, "
+    "no markdown fences."
+)
+
+_PREFILL_PROMPT = """\
+Extract applicant information from the sources below.
+
+MESSAGE CONTEXT (may contain target program, institution, letter type, deadline):
+{message_text}
+
+CV / RÉSUMÉ TEXT:
+{cv_text}
+
+Return a JSON object containing ONLY the fields you can determine with reasonable
+confidence.  Omit any field you cannot determine — do not guess or invent values.
+
+{{
+  "name":               "<candidate's full name>",
+  "role":               "<current role or most recent position/degree programme>",
+  "degree_completed":   "<most relevant degree — format: Degree, Field, Institution, Year>",
+  "target_program":     "<programme they are applying to, if stated>",
+  "target_institution": "<institution they are applying to, if stated>",
+  "letter_type":        "<one of: phd-application | postdoc | faculty | fellowship | employment | award>",
+  "deadline":           "<application deadline if stated, YYYY-MM-DD format>",
+  "addressee":          "<addressee if stated, e.g. Graduate Admissions Committee>"
+}}
+
+Return ONLY the JSON object."""
+
+
+def _extract_prefill_data(cv_text: str, message_text: str) -> dict:
+    """
+    Ask Claude to extract candidate and letter metadata from CV text and/or
+    the Slack message body.  Returns a (possibly sparse) dict of extracted fields.
+    """
+    prompt = _PREFILL_PROMPT.format(
+        message_text=message_text.strip() or "(none)",
+        cv_text=cv_text[:5000] if cv_text else "(none)",
+    )
+    try:
+        response = call_with_retries(
+            config.claude.messages.create,
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=512,
+            system=_PREFILL_SYSTEM,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        m   = re.search(r'\{.*\}', raw, re.DOTALL)
+        result = json.loads(m.group() if m else raw)
+        if isinstance(result, dict):
+            return result
+    except Exception as exc:
+        log.warning("ref_letter: prefill extraction failed: %s", exc)
+    return {}
+
+
+def _build_prefilled_yaml_text(extracted: dict) -> str:
+    """
+    Render a YAML template string with *extracted* values filled in.
+    Missing fields get a # TODO comment so the user knows exactly what to add.
+    """
+    def v(key: str, hint: str = "") -> str:
+        """Return the extracted value (annotated) or a blank TODO comment."""
+        val = extracted.get(key, "")
+        if val:
+            # Quote strings that contain YAML-special characters
+            needs_quotes = any(c in str(val) for c in (',', ':', '#', '[', ']', '{', '}'))
+            safe = f'"{val}"' if needs_quotes else str(val)
+            return f"{safe}  # ← auto-filled"
+        return f"  # TODO{(' — ' + hint) if hint else ''}"
+
+    def todo(hint: str = "") -> str:
+        return f"  # TODO{(' — ' + hint) if hint else ''}"
+
+    lines = [
+        "# Reference letter context — pre-filled from CV/message.",
+        "# Review all fields, complete the TODOs, then upload this file back to",
+        "# the channel (you may also re-attach the CV alongside it).",
+        "",
+        "candidate:",
+        f"  name: {v('name', 'candidate full name')}",
+        f"  role: {v('role', 'e.g. MASc student / Research Associate')}",
+        f"  degree_completed: {v('degree_completed', 'e.g. MASc, Mech Engineering, Western, 2024')}",
+        f"  target_program: {v('target_program', 'e.g. PhD in Mechanical Engineering')}",
+        f"  target_institution: {v('target_institution', 'e.g. MIT')}",
+        f"  relationship:{todo('e.g. Supervised thesis at Western (2022–2024)')}",
+        f"  duration_known:{todo('e.g. 2 years')}",
+        "  context: >",
+        f"    {todo('key context — research contributions, achievements, character')}",
+        "",
+        "letter:",
+        f"  type: {v('letter_type', 'phd-application | postdoc | faculty | fellowship | employment | award')}",
+        f"  deadline: {v('deadline', 'YYYY-MM-DD')}",
+        f"  addressee: {v('addressee', 'e.g. Graduate Admissions Committee')}",
+        "",
+        "strengths:",
+        f"  - label:{todo('e.g. Research Independence')}",
+        "    detail: >",
+        f"      {todo('describe this strength with a specific observation or outcome')}",
+        "",
+        "specific_examples:",
+        f"  #{todo('add 1–2 concrete examples to weave into the letter')}",
+        "  # - >",
+        "  #     Example here.",
+        "",
+        f"areas_to_emphasize:{todo('optional — e.g. Readiness for independent research')}",
+        "  # - ",
+        "",
+        f"tone: null{todo('optional — e.g. particularly warm; strongest student I have supervised')}",
+        "",
+        f"weaknesses: null{todo('optional — e.g. Took time to build confidence presenting')}",
+    ]
+    return "\n".join(lines)
+
+
+def _post_interactive_prompt(
+    channel_id: str,
+    ts: str,
+    extracted: dict,
+    cv_text: str,
+):
+    """
+    Post a conversational prompt in the CV upload thread asking the user to
+    supply the details that couldn't be extracted automatically.  Save the
+    partial context to _pending so the thread reply can be handled later.
+    """
+    name = extracted.get("name") or "the candidate"
+
+    # Summarise what was found in the CV
+    found_lines = []
+    if extracted.get("name"):
+        found_lines.append(f"• Name: *{extracted['name']}*")
+    if extracted.get("role"):
+        found_lines.append(f"• Current: {extracted['role']}")
+    if extracted.get("degree_completed"):
+        found_lines.append(f"• Background: {extracted['degree_completed']}")
+    if extracted.get("target_institution"):
+        found_lines.append(f"• Target institution(s): {extracted['target_institution']}")
+    found_text = "\n".join(found_lines) if found_lines else "_(nothing auto-extracted)_"
+
+    prompt_lines = [
+        f"📄 *Reference letter for {name}* — please reply here with the details\n",
+        f"Found from CV:\n{found_text}\n",
+        "*Reply with the following — write in whatever format you like:*",
+        "• *Letter type* — e.g. \"undergraduate transfer\", \"PhD application\", \"fellowship\"",
+        "• *Target programme & institution*",
+        "• *Your relationship* with the student (role, course, how long you've known them)",
+        "• *Course details* (if applicable) — topics covered, the student's grade or standing, "
+        "assessment structure; these prevent invented course specifics in the letter",
+        "• *Context & key qualities* — what should the letter convey?",
+        "• *Strengths* to highlight, with any specific observations you can share",
+        "• *Tone* — e.g. \"strong endorsement\" or \"generic, limited contact — one semester\"",
+        "• *Deadline* if applicable",
+        "\n_A few sentences covering the key points is fine — I'll handle the structure._",
+    ]
+
+    config.slack.chat_postMessage(
+        channel=channel_id,
+        thread_ts=ts,
+        text="\n".join(prompt_lines),
+    )
+
+    _pending[ts] = {
+        "channel_id": channel_id,
+        "extracted":  extracted,
+        "cv_text":    cv_text,
+    }
+    log.info("ref_letter: interactive session saved for thread_ts=%s", ts)
+
+
+def _handle_cv_prefill(channel_id: str, ts: str, files: list[dict], message_text: str):
+    """
+    Entry point when a CV is uploaded without a YAML context file.
+    Extracts what it can from the CV and message text, then posts an
+    interactive prompt in the thread for the user to fill in the rest.
+    """
+    config.slack.chat_postMessage(
+        channel=channel_id,
+        thread_ts=ts,
+        text="📄 Reading CV…",
+    )
+
+    # _extract_cv skips whichever file is passed as yaml_file; passing None
+    # means all attachments are considered (there is no YAML to skip here).
+    cv_text = _extract_cv(files, None)  # type: ignore[arg-type]
+
+    if not cv_text and not message_text.strip():
+        send_template(channel_id)
+        return
+
+    extracted = _extract_prefill_data(cv_text, message_text)
+    _post_interactive_prompt(channel_id, ts, extracted, cv_text)
+
+
+# ── Thread reply parsing ───────────────────────────────────────────────────────
+
+_PARSE_REPLY_SYSTEM = (
+    "You synthesise a structured reference letter context from pre-extracted CV "
+    "data and a user's free-form instructions. Return only valid JSON — no prose, "
+    "no markdown fences."
+)
+
+_PARSE_REPLY_PROMPT = """\
+Combine the pre-extracted CV data and the user's reply into a complete context
+dict for generating a reference letter.
+
+PRE-EXTRACTED FROM CV:
+{extracted_json}
+
+USER'S REPLY (contains letter type, relationship, strengths, tone, etc.):
+{reply_text}
+
+Return a JSON object with this structure (omit keys whose value would be null
+or empty, except candidate.name which is always required):
+{{
+  "candidate": {{
+    "name": "<full name>",
+    "role": "<current role or programme>",
+    "degree_completed": "<previous degree if known>",
+    "target_program": "<programme applying to>",
+    "target_institution": "<institution(s) applying to>",
+    "relationship": "<how the writer knows the candidate>",
+    "duration_known": "<how long known>",
+    "context": "<background, qualities, achievements>"
+  }},
+  "letter": {{
+    "type": "<letter type — use the user's own words, e.g. 'undergraduate transfer application'>",
+    "deadline": "<YYYY-MM-DD or omit>",
+    "addressee": "<e.g. Admissions Committee>"
+  }},
+  "course_info": "<course name, topics, grade/standing, assessment details if mentioned>",
+  "strengths": [
+    {{"label": "<strength name>", "detail": "<specific evidence or observation>"}}
+  ],
+  "specific_examples": ["<example>"],
+  "areas_to_emphasize": ["<area>"],
+  "tone": "<tone guidance>",
+  "weaknesses": null
+}}
+
+Rules:
+- candidate.name: use the pre-extracted value if the user did not provide one.
+- letter.type: preserve the user's description exactly (do not normalise to a
+  code — "undergraduate transfer application" is fine as-is).
+- course_info: include only if the user mentioned course details (name, topics, grade, etc.).
+- Include strengths only if the user described them; omit the key otherwise.
+- Return ONLY the JSON object."""
+
+
+def _parse_reply_with_claude(reply_text: str, extracted: dict) -> dict | None:
+    """
+    Synthesise a complete data dict from the user's free-form thread reply
+    and the pre-extracted CV data.  Returns a dict ready for _generate_body,
+    or None if parsing fails.
+    """
+    prompt = _PARSE_REPLY_PROMPT.format(
+        extracted_json=json.dumps(extracted, ensure_ascii=False, indent=2),
+        reply_text=reply_text.strip(),
+    )
+    try:
+        response = call_with_retries(
+            config.claude.messages.create,
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=1024,
+            system=_PARSE_REPLY_SYSTEM,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw    = response.content[0].text.strip()
+        m      = re.search(r'\{.*\}', raw, re.DOTALL)
+        result = json.loads(m.group() if m else raw)
+        if isinstance(result, dict) and (result.get("candidate") or {}).get("name"):
+            return result
+        log.warning("ref_letter: parsed reply missing candidate.name")
+    except Exception as exc:
+        log.error("ref_letter: reply parsing failed: %s", exc)
+    return None
+
+
+def _handle_thread_reply(event: dict, thread_ts: str):
+    """
+    Process a user's reply in a pending interactive letter thread.
+    Parses the reply, generates the letter, and posts the result back
+    into the same thread.
+    """
+    pending = _pending.pop(thread_ts, None)
+    if not pending:
+        return
+
+    channel_id = pending["channel_id"]
+    extracted  = pending["extracted"]
+    cv_text    = pending["cv_text"]
+    reply_text = event.get("text", "")
+
+    if not reply_text.strip():
+        config.slack.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text="⚠️ Didn't catch any text in your reply — please describe the letter details.",
+        )
+        _pending[thread_ts] = pending   # give the user another chance
+        return
+
+    config.slack.chat_postMessage(
+        channel=channel_id,
+        thread_ts=thread_ts,
+        text="✍️ Got it — generating the letter now…",
+    )
+
+    data = _parse_reply_with_claude(reply_text, extracted)
+    if not data:
+        config.slack.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text=(
+                "⚠️ Could not parse your reply into a letter context. "
+                "Try rephrasing, or upload a completed YAML context file instead."
+            ),
+        )
+        return
+
+    missing = _check_template_files()
+    if missing:
+        config.slack.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text=(
+                f"⚠️ Missing template file(s): {', '.join(missing)}\n"
+                f"Add them to `{config.REF_LETTER_TEMPLATES_DIR}` and try again."
+            ),
+        )
+        return
+
+    try:
+        body = _generate_body(data, cv_text)
+    except Exception as exc:
+        log.error("ref_letter: generation failed in thread reply: %s", exc)
+        config.slack.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text=f"⚠️ Letter generation failed: {exc}",
+        )
+        return
+
+    tex_content = _render_tex(data, body)
+    stem        = _make_stem(data)
+    pdf_path, _ = _compile_pdf(tex_content, stem)
+    zip_path    = _build_zip(stem, tex_content, pdf_path)
+
+    candidate_name = (data.get("candidate") or {}).get("name", "candidate")
+    status_parts   = ["✅ *Reference letter ready*"]
+    if pdf_path:
+        status_parts.append("Includes `.tex` and compiled `.pdf`.")
+    else:
+        status_parts.append("`.tex` only — PDF compilation failed.")
+
+    activity_log.record(
+        "ref_letter",
+        candidate=candidate_name,
+        letter_type=(data.get("letter") or {}).get("type"),
+        had_pdf=pdf_path is not None,
+        source="interactive",
+    )
+
+    try:
+        config.slack.files_upload_v2(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            file=str(zip_path),
+            filename=zip_path.name,
+            title=f"Reference Letter — {candidate_name}",
+            initial_comment="\n".join(status_parts),
+        )
+    except Exception as exc:
+        log.error("ref_letter: upload failed in thread reply: %s", exc)
+        config.slack.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text=f"⚠️ Could not upload zip: {exc}",
+        )
+
+
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 
 def process_message(event: dict):
@@ -514,9 +954,16 @@ def process_message(event: dict):
     if subtype in ("message_changed", "message_deleted", "channel_join", "channel_leave"):
         return
 
-    channel_id = event.get("channel", "")
-    ts         = event.get("ts", "")
-    files      = event.get("files") or []
+    channel_id   = event.get("channel", "")
+    ts           = event.get("ts", "")
+    thread_ts    = event.get("thread_ts")
+    files        = event.get("files") or []
+    message_text = event.get("text", "")
+
+    # ── Thread reply to a pending interactive session ─────────────────────────
+    if thread_ts and thread_ts != ts and thread_ts in _pending:
+        _handle_thread_reply(event, thread_ts)
+        return
 
     # ── Locate the YAML context file ─────────────────────────────────────────
     yaml_file = next(
@@ -529,7 +976,19 @@ def process_message(event: dict):
     )
 
     if not yaml_file:
-        send_template(channel_id)
+        # Check whether a CV (PDF or Word doc) was attached — if so, interactive mode
+        has_cv = any(
+            f.get("mimetype") in (
+                "application/pdf",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            or (f.get("filetype") or "").lower() in ("pdf", "docx")
+            for f in files
+        )
+        if has_cv:
+            _handle_cv_prefill(channel_id, ts, files, message_text)
+        else:
+            send_template(channel_id)
         return
 
     # ── Download and parse YAML ───────────────────────────────────────────────
