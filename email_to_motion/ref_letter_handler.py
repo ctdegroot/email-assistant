@@ -441,6 +441,23 @@ def _build_zip(
     return zip_path
 
 
+# ── Output file cleanup ───────────────────────────────────────────────────────
+
+def _cleanup_output_files(zip_path: Path):
+    """
+    Remove the .zip, .tex, and .pdf generated for a letter after a successful
+    Slack upload.  Failures are logged but never raised — cleanup is best-effort.
+    """
+    stem    = zip_path.stem
+    out_dir = zip_path.parent
+    for suffix in (".zip", ".tex", ".pdf"):
+        target = out_dir / f"{stem}{suffix}"
+        try:
+            target.unlink(missing_ok=True)
+        except Exception as exc:
+            log.warning("ref_letter: could not remove %s: %s", target, exc)
+
+
 # ── Filename slug ─────────────────────────────────────────────────────────────
 
 def _make_stem(data: dict) -> str:
@@ -930,6 +947,7 @@ def _handle_thread_reply(event: dict, thread_ts: str):
             title=f"Reference Letter — {candidate_name}",
             initial_comment="\n".join(status_parts),
         )
+        _cleanup_output_files(zip_path)
     except Exception as exc:
         log.error("ref_letter: upload failed in thread reply: %s", exc)
         config.slack.chat_postMessage(
@@ -1077,8 +1095,8 @@ def process_message(event: dict):
             title=f"Reference Letter — {candidate_name}",
             initial_comment="\n".join(status_parts),
         )
+        _cleanup_output_files(zip_path)
     except Exception as e:
-        # Fallback: post the tex content inline if file upload fails
         log.error("ref_letter: file upload failed: %s", e)
         config.slack.chat_postMessage(
             channel=channel_id,
