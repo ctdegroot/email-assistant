@@ -145,17 +145,25 @@ def _salutation(data: dict) -> str:
 
 # ── Claude prompt ─────────────────────────────────────────────────────────────
 
-_SYSTEM = (
-    "You are writing a reference letter on behalf of Christopher DeGroot, "
-    "Assistant Professor, Department of Mechanical and Materials Engineering, "
-    "Western University. "
-    "Write in first person, using a professional academic tone. "
-    "Avoid generic superlatives — every positive claim must be grounded in a "
-    "specific observation, example, or outcome. "
-    "Return ONLY the body paragraphs of the letter (no salutation, no date, "
-    "no 'Sincerely', no LaTeX markup, no markdown). "
-    "Separate paragraphs with a single blank line."
-)
+def _build_system_prompt() -> str:
+    """Construct the Claude system prompt using the signer's identity from config."""
+    parts = ["You are writing a reference letter on behalf of"]
+    identity_parts = [p for p in [
+        config.SIGNER_NAME,
+        config.SIGNER_TITLE,
+        config.SIGNER_DEPARTMENT,
+        config.SIGNER_INSTITUTION,
+    ] if p]
+    parts.append(", ".join(identity_parts) + "." if identity_parts else "the letter author.")
+    parts += [
+        "Write in first person, using a professional academic tone.",
+        "Avoid generic superlatives — every positive claim must be grounded in a"
+        " specific observation, example, or outcome.",
+        "Return ONLY the body paragraphs of the letter (no salutation, no date,"
+        " no 'Sincerely', no LaTeX markup, no markdown).",
+        "Separate paragraphs with a single blank line.",
+    ]
+    return " ".join(parts)
 
 
 def _build_prompt(data: dict, cv_text: str) -> str:
@@ -232,7 +240,7 @@ def _generate_body(data: dict, cv_text: str) -> str:
         config.claude.messages.create,
         model="claude-sonnet-4-5-20250929",
         max_tokens=2000,
-        system=_SYSTEM,
+        system=_build_system_prompt(),
         messages=[{"role": "user", "content": prompt}],
     )
     return response.content[0].text.strip()

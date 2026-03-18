@@ -12,3 +12,5 @@ python-docx
 gitpython
 trafilatura
 pyyaml
+pypdf          # PDF form field introspection and manipulation
+pymupdf        # AcroForm filling, image stamping (Signature.pdf overlay)

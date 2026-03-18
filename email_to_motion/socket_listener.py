@@ -16,6 +16,7 @@ Currently registered:
   "Create Calendar Event" shortcut      — open modal → send calendar invite
   #notes-inbox messages                 — generate Obsidian .md note from forwarded email
   #ref-letters messages (with YAML)     — generate reference letter PDF + .tex zip
+  #sign-pdf messages (with PDF)         — sign and date fillable PDF forms
   wd_dismiss / wd_snooze / wd_task_*   — watch-date reminder button actions
 """
 
@@ -36,6 +37,7 @@ from . import conflict_checker
 from . import slack_notes_handler
 from . import watch_date_handler
 from . import ref_letter_handler
+from . import pdf_sign_handler
 from .tasks import process_channel
 from .events import process_calendar_channel
 from .slack_helpers import get_channel_id
@@ -241,6 +243,12 @@ def _dispatch(client: SocketModeClient, req: SocketModeRequest):
                     args=(event,),
                     daemon=True,
                 ).start()
+            elif pdf_sign_handler._channel_id and channel == pdf_sign_handler._channel_id:
+                threading.Thread(
+                    target=pdf_sign_handler.process_message,
+                    args=(event,),
+                    daemon=True,
+                ).start()
 
 
 def start(app_token: str) -> SocketModeClient:
@@ -269,6 +277,7 @@ def start(app_token: str) -> SocketModeClient:
 
     slack_notes_handler.init(config.SLACK_NOTES_CHANNEL)
     ref_letter_handler.init(config.SLACK_REFLETTER_CHANNEL)
+    pdf_sign_handler.init(config.SLACK_SIGN_CHANNEL)
 
     notes_status = (
         f"notes-inbox #{config.SLACK_NOTES_CHANNEL} ({slack_notes_handler._channel_id})"
@@ -280,9 +289,14 @@ def start(app_token: str) -> SocketModeClient:
         if ref_letter_handler._channel_id
         else "ref-letters disabled"
     )
+    sign_status = (
+        f"sign-pdf #{config.SLACK_SIGN_CHANNEL} ({pdf_sign_handler._channel_id})"
+        if pdf_sign_handler._channel_id
+        else "sign-pdf disabled"
+    )
     print(
         f"🔌  Socket Mode connected — "
         f"/availability, /conflict-check, Create Task, Create Calendar Event, "
-        f"{notes_status}, {refletter_status} active."
+        f"{notes_status}, {refletter_status}, {sign_status} active."
     )
     return client

@@ -80,6 +80,21 @@ OBSIDIAN_VAULT_PATH       = os.environ.get("OBSIDIAN_VAULT_PATH", "~/obsidian-va
 # Example: "Notes/Inbox" or "00 Inbox"
 OBSIDIAN_NOTES_SUBFOLDER  = os.environ.get("OBSIDIAN_NOTES_SUBFOLDER", "Notes/Inbox")
 
+# ── Signer identity (used by PDF signer and reference letter generator) ───────
+# Your name, title, department, and institution are used to auto-fill common
+# form fields and to personalise the reference letter prompt.
+SIGNER_NAME        = os.environ.get("SIGNER_NAME",        "")
+SIGNER_TITLE       = os.environ.get("SIGNER_TITLE",       "")
+SIGNER_DEPARTMENT  = os.environ.get("SIGNER_DEPARTMENT",  "")
+SIGNER_INSTITUTION = os.environ.get("SIGNER_INSTITUTION", "")
+SIGNER_EMAIL       = os.environ.get("SIGNER_EMAIL",       "")
+
+# PDF sign-and-date channel — channel name (without #) for the PDF signing pipeline.
+# Upload a fillable PDF here and the bot will sign it, fill today's date, and
+# auto-populate name/title/institution fields where detected.
+# Leave blank to disable.
+SLACK_SIGN_CHANNEL = os.environ.get("SLACK_SIGN_CHANNEL", "")
+
 PROCESSED_EMOJI = "white_check_mark"   # ✅ added to handled messages
 
 # ── Activity log ───────────────────────────────────────────────────────────────
