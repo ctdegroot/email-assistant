@@ -80,7 +80,7 @@ IMPORTANT — Forwarding note (read this first):
 
   Step 1: Read the forwarding note and identify exactly which items it names for the calendar
           (e.g. "place hold in calendar for the public lecture and exam" → whitelist =
-          {public lecture, exam}).
+          {{public lecture, exam}}).
   Step 2: Create calendar entries ONLY for those whitelisted items. Everything else —
           including anything the note routes to Motion, any deadline-driven task, any item
           the note doesn't mention at all — must be excluded.
