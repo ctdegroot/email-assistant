@@ -253,13 +253,29 @@ def process_channel() -> int:
 
         except json.JSONDecodeError as e:
             log.error("tasks: Claude returned invalid JSON: %s", e)
+            config.slack.chat_postMessage(
+                channel=channel_id,
+                thread_ts=msg["ts"],
+                text=f"⚠️ Could not parse Claude's response as JSON — will retry next poll. ({e})",
+            )
         except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else "?"
             log.error(
                 "tasks: Motion API error %s for ts=%s: %s",
-                e.response.status_code, msg.get("ts"), e.response.text,
+                status, msg.get("ts"), e.response.text if e.response is not None else e,
+            )
+            config.slack.chat_postMessage(
+                channel=channel_id,
+                thread_ts=msg["ts"],
+                text=f"⚠️ Motion API error (HTTP {status}) — will retry next poll. Check logs.",
             )
         except Exception as e:
             log.error("tasks: unexpected error for ts=%s: %s", msg.get("ts"), e, exc_info=True)
+            config.slack.chat_postMessage(
+                channel=channel_id,
+                thread_ts=msg["ts"],
+                text=f"⚠️ Unexpected error processing this message — will retry next poll. ({type(e).__name__}: {e})",
+            )
 
     log.info("tasks: done — created %d task(s) from %d email(s)", created, len(messages))
     return created

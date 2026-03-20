@@ -438,7 +438,8 @@ class TestProcessMessage:
         with patch("email_to_motion.ref_letter_handler._download_slack_file",
                    return_value=MINIMAL_YAML.encode()), \
              patch("email_to_motion.ref_letter_handler._compile_pdf",
-                   return_value=(None, "not found")):
+                   return_value=(None, "not found")), \
+             patch("email_to_motion.ref_letter_handler._cleanup_output_files"):
             process_message(event)
 
         upload_call = _cfg.slack.files_upload_v2.call_args

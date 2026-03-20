@@ -149,61 +149,61 @@ def _email_file_msg(ts: str, subject: str, body: str, sender: str = "alice@examp
 class TestProcessChannel:
 
     def test_returns_count_of_created_tasks(self, tasks_env):
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]):
             count = tasks.process_channel()
         assert count == 1
 
     def test_motion_api_called(self, tasks_env):
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]) as mock_post:
             tasks.process_channel()
         mock_post.assert_called_once()
 
     def test_motion_api_receives_task_name(self, tasks_env):
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]) as mock_post:
             tasks.process_channel()
         payload = mock_post.call_args.kwargs["json"]
         assert payload["name"] == "Review budget proposal"
 
     def test_motion_api_receives_workspace_id(self, tasks_env):
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]) as mock_post:
             tasks.process_channel()
         payload = mock_post.call_args.kwargs["json"]
         assert payload["workspaceId"] == "WS_TEST"
 
     def test_motion_api_receives_assignee_id(self, tasks_env):
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]) as mock_post:
             tasks.process_channel()
         payload = mock_post.call_args.kwargs["json"]
         assert payload["assigneeId"] == "USER_TEST"
 
     def test_slack_confirmation_posted(self, tasks_env):
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]):
             tasks.process_channel()
         tasks_env["slack"].chat_postMessage.assert_called_once()
 
     def test_slack_confirmation_in_thread(self, tasks_env):
         """Confirmation must be a thread reply to the original message."""
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]):
             tasks.process_channel()
         kwargs = tasks_env["slack"].chat_postMessage.call_args.kwargs
         assert kwargs.get("thread_ts") == _TS
 
     def test_slack_confirmation_mentions_task_name(self, tasks_env):
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]):
             tasks.process_channel()
         text = tasks_env["slack"].chat_postMessage.call_args.kwargs["text"]
         assert "Review budget proposal" in text
 
     def test_message_marked_processed_after_task_created(self, tasks_env):
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]):
             tasks.process_channel()
         tasks_env["slack"].reactions_add.assert_called_once()
@@ -213,7 +213,7 @@ class TestProcessChannel:
 
     def test_no_unprocessed_messages_returns_zero(self, tasks_env):
         tasks_env["slack"].conversations_history.return_value = {"messages": []}
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]):
             count = tasks.process_channel()
         assert count == 0
@@ -224,7 +224,7 @@ class TestProcessChannel:
         tasks_env["slack"].conversations_history.return_value = {
             "messages": [_plain_msg(_TS, "Hi")]
         }
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]):
             count = tasks.process_channel()
         assert count == 0
@@ -235,7 +235,7 @@ class TestProcessChannel:
         tasks_env["slack"].conversations_history.return_value = {
             "messages": [_plain_msg(_TS, "Please review the unique budget proposal XYZZY.")]
         }
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]):
             tasks.process_channel()
         prompt = tasks_env["claude"].messages.create.call_args.kwargs["messages"][0]["content"]
@@ -250,7 +250,7 @@ class TestProcessChannel:
                 body="Unique body text QWERTY for extraction testing.",
             )]
         }
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]):
             tasks.process_channel()
         prompt = tasks_env["claude"].messages.create.call_args.kwargs["messages"][0]["content"]
@@ -262,7 +262,7 @@ class TestProcessChannelMultipleTasks:
     def test_two_tasks_from_one_email_both_created(self, tasks_env):
         """Claude returning two tasks → two Motion API calls."""
         tasks_env["claude_resp"].content = [MagicMock(text=_TWO_TASK_JSON)]
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]) as mock_post:
             count = tasks.process_channel()
         assert count == 2
@@ -271,7 +271,7 @@ class TestProcessChannelMultipleTasks:
     def test_two_tasks_confirmation_mentions_count(self, tasks_env):
         """Confirmation text must state how many tasks were created."""
         tasks_env["claude_resp"].content = [MagicMock(text=_TWO_TASK_JSON)]
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]):
             tasks.process_channel()
         text = tasks_env["slack"].chat_postMessage.call_args.kwargs["text"]
@@ -285,7 +285,7 @@ class TestProcessChannelMultipleTasks:
                 _plain_msg(_TS2, "Please confirm your attendance at the faculty meeting next week."),
             ]
         }
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]):
             count = tasks.process_channel()
         assert count == 2
@@ -300,7 +300,7 @@ class TestProcessChannelMultipleTasks:
                 "reactions": [{"name": "white_check_mark", "count": 1, "users": ["U123"]}],
             }]
         }
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]):
             count = tasks.process_channel()
         assert count == 0
@@ -312,7 +312,7 @@ class TestProcessChannelErrorHandling:
     def test_invalid_claude_json_does_not_crash(self, tasks_env):
         """If Claude returns bad JSON, process_channel must continue without raising."""
         tasks_env["claude_resp"].content = [MagicMock(text="This is not JSON at all!")]
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]):
             # Should not raise
             count = tasks.process_channel()
@@ -324,7 +324,7 @@ class TestProcessChannelErrorHandling:
         error_resp.raise_for_status.side_effect = requests.HTTPError(
             response=MagicMock(status_code=429, text="Too Many Requests")
         )
-        with patch("email_to_motion.tasks.requests.post", return_value=error_resp):
+        with patch("email_to_motion.tasks.post_with_retries", return_value=error_resp):
             count = tasks.process_channel()
         assert count == 0
 
@@ -334,7 +334,7 @@ class TestProcessChannelErrorHandling:
         error_resp.raise_for_status.side_effect = requests.HTTPError(
             response=MagicMock(status_code=500, text="Internal Server Error")
         )
-        with patch("email_to_motion.tasks.requests.post", return_value=error_resp):
+        with patch("email_to_motion.tasks.post_with_retries", return_value=error_resp):
             tasks.process_channel()
         tasks_env["slack"].reactions_add.assert_not_called()
 
@@ -385,7 +385,7 @@ class TestCreateMotionTask:
             "priority": "MEDIUM", "duration": 60,
             "dueDate": "2026-03-20", "deadlineType": "SOFT",
         }
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]) as mock_post:
             tasks.create_motion_task(task)
         url = mock_post.call_args.args[0]
@@ -398,7 +398,7 @@ class TestCreateMotionTask:
             "priority": "MEDIUM", "duration": 60,
             "dueDate": None, "deadlineType": "SOFT",
         }
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]) as mock_post:
             tasks.create_motion_task(task)
         payload = mock_post.call_args.kwargs["json"]
@@ -411,7 +411,7 @@ class TestCreateMotionTask:
             "priority": "HIGH", "duration": 90,
             "dueDate": "2026-03-20", "deadlineType": "HARD",
         }
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]) as mock_post:
             tasks.create_motion_task(task)
         payload = mock_post.call_args.kwargs["json"]
@@ -424,7 +424,7 @@ class TestCreateMotionTask:
             "priority": "LOW", "duration": 30,
             "dueDate": "2026-03-20", "deadlineType": "NONE",
         }
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]) as mock_post:
             tasks.create_motion_task(task)
         headers = mock_post.call_args.kwargs["headers"]
@@ -437,7 +437,7 @@ class TestChannelIdCaching:
 
     def test_channel_looked_up_on_first_call(self, tasks_env):
         tasks_env["slack"].conversations_history.return_value = {"messages": []}
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]):
             tasks.process_channel()
         tasks_env["slack"].conversations_list.assert_called_once()
@@ -445,7 +445,7 @@ class TestChannelIdCaching:
     def test_channel_not_looked_up_again_on_second_call(self, tasks_env):
         """Channel ID is cached; conversations_list must not be called on repeat runs."""
         tasks_env["slack"].conversations_history.return_value = {"messages": []}
-        with patch("email_to_motion.tasks.requests.post",
+        with patch("email_to_motion.tasks.post_with_retries",
                    return_value=tasks_env["motion_resp"]):
             tasks.process_channel()
             tasks.process_channel()

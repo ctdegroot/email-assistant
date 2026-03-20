@@ -236,9 +236,19 @@ def process_calendar_channel() -> int:
             log.info("calendar: extracted %d event(s)", len(events))
         except json.JSONDecodeError as e:
             log.error("calendar: Claude returned invalid JSON: %s", e)
+            config.slack.chat_postMessage(
+                channel=channel_id,
+                thread_ts=msg["ts"],
+                text=f"⚠️ Could not parse Claude's response as JSON — will retry next poll. ({e})",
+            )
             continue
         except Exception as e:
             log.error("calendar: extraction error for ts=%s: %s", msg.get("ts"), e, exc_info=True)
+            config.slack.chat_postMessage(
+                channel=channel_id,
+                thread_ts=msg["ts"],
+                text=f"⚠️ Error extracting events — will retry next poll. ({type(e).__name__}: {e})",
+            )
             continue
 
         if not events:

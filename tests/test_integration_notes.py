@@ -314,7 +314,7 @@ class TestAttachmentPipeline:
         att = {"filename": "report.pdf", "mimetype": "application/pdf",
                "url": "https://files-origin.slack.com/files-email-priv/xxx/report.pdf"}
         event = _email_event(email_attachments=[att])
-        with patch("email_to_motion.slack_notes_handler.requests.get") as mock_get, \
+        with patch("email_to_motion.slack_notes_handler.get_with_retries") as mock_get, \
              patch.dict("email_to_motion.slack_notes_handler._BY_MIME",
                         {"application/pdf": lambda _b: "PDF extracted text content"}):
             mock_get.return_value = MagicMock(content=b"%PDF fake", status_code=200)
@@ -335,7 +335,7 @@ class TestAttachmentPipeline:
                "url": "https://files-origin.slack.com/files-email-priv/xxx/report.pdf"}
         event = _email_event(email_attachments=[att])
         fake_extractor = lambda _bytes: "Unique extracted text ABCXYZ"
-        with patch("email_to_motion.slack_notes_handler.requests.get") as mock_get, \
+        with patch("email_to_motion.slack_notes_handler.get_with_retries") as mock_get, \
              patch.dict("email_to_motion.slack_notes_handler._BY_MIME",
                         {"application/pdf": fake_extractor}):
             mock_get.return_value = MagicMock(content=b"%PDF fake", status_code=200)
@@ -350,7 +350,7 @@ class TestAttachmentPipeline:
         att = {"filename": "report.pdf", "mimetype": "application/pdf",
                "url": "https://files-origin.slack.com/files-email-priv/xxx/report.pdf"}
         event = _email_event(email_attachments=[att])
-        with patch("email_to_motion.slack_notes_handler.requests.get",
+        with patch("email_to_motion.slack_notes_handler.get_with_retries",
                    side_effect=ConnectionError("network error")):
             snh.process_message(event)
 
@@ -361,7 +361,7 @@ class TestAttachmentPipeline:
         att = {"filename": "broken.pdf", "mimetype": "application/pdf",
                "url": "https://files-origin.slack.com/broken.pdf"}
         event = _email_event(email_attachments=[att])
-        with patch("email_to_motion.slack_notes_handler.requests.get",
+        with patch("email_to_motion.slack_notes_handler.get_with_retries",
                    side_effect=ConnectionError("network error")):
             snh.process_message(event)
 
@@ -987,7 +987,7 @@ class TestDirectFileUpload:
 
     def test_pdf_filename_used_as_subject(self, notes_env):
         """The PDF filename (minus extension) becomes the note subject / filename."""
-        with patch("email_to_motion.slack_notes_handler.requests.get") as mock_get, \
+        with patch("email_to_motion.slack_notes_handler.get_with_retries") as mock_get, \
              patch.dict("email_to_motion.slack_notes_handler._BY_MIME",
                         {"application/pdf": lambda _b: "Extracted PDF text"}):
             mock_get.return_value = MagicMock(content=b"%PDF fake", status_code=200)
@@ -999,7 +999,7 @@ class TestDirectFileUpload:
 
     def test_pdf_content_reaches_claude(self, notes_env):
         """Extracted PDF text must appear in the Claude prompt."""
-        with patch("email_to_motion.slack_notes_handler.requests.get") as mock_get, \
+        with patch("email_to_motion.slack_notes_handler.get_with_retries") as mock_get, \
              patch.dict("email_to_motion.slack_notes_handler._BY_MIME",
                         {"application/pdf": lambda _b: "Unique PDF content ZZZQ"}):
             mock_get.return_value = MagicMock(content=b"%PDF fake", status_code=200)
@@ -1010,7 +1010,7 @@ class TestDirectFileUpload:
         assert "Unique PDF content ZZZQ" in prompt
 
     def test_direct_pdf_creates_note_file(self, notes_env):
-        with patch("email_to_motion.slack_notes_handler.requests.get") as mock_get, \
+        with patch("email_to_motion.slack_notes_handler.get_with_retries") as mock_get, \
              patch.dict("email_to_motion.slack_notes_handler._BY_MIME",
                         {"application/pdf": lambda _b: "PDF text"}):
             mock_get.return_value = MagicMock(content=b"%PDF fake", status_code=200)

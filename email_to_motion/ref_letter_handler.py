@@ -141,7 +141,7 @@ def _type_label(letter_type: str) -> str:
     """
     if not letter_type:
         return "Application"
-    return _TYPE_LABELS.get(letter_type) or letter_type.replace("-", " ").title()
+    return _TYPE_LABELS.get(letter_type) or f"{letter_type.replace('-', ' ').title()} Application"
 
 
 def _re_line(data: dict) -> str:
