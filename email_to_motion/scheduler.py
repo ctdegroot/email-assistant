@@ -18,6 +18,7 @@ import schedule
 
 from . import config
 from .conflict_checker import run_morning_check
+from .gmail_handler import poll_and_process
 from .watch_date_handler import scan_and_remind
 
 log = logging.getLogger(__name__)
@@ -32,6 +33,10 @@ def _watch_date_job():
     scan_and_remind()
 
 
+def _gmail_poll_job():
+    poll_and_process()
+
+
 def start():
     """Register all scheduled jobs and launch the background runner thread."""
     for day in ("monday", "tuesday", "wednesday", "thursday", "friday"):
@@ -40,6 +45,10 @@ def start():
     # Watch-date reminders run every day (including weekends) since deadlines
     # don't stop for weekends.
     schedule.every().day.at("09:00").do(_watch_date_job)
+
+    # Gmail alias polling — checks INBOX every 5 minutes for emails addressed
+    # to a known bot alias (e.g. +scheduling) and replies automatically.
+    schedule.every(5).minutes.do(_gmail_poll_job)
 
     def _run():
         while True:
@@ -51,4 +60,7 @@ def start():
             _time.sleep(30)   # check every 30 s — fine-grained enough for minute-level jobs
 
     threading.Thread(target=_run, daemon=True, name="scheduler").start()
-    log.info("scheduler: started — conflict check weekdays 08:00, watch-date scan daily 09:00")
+    log.info(
+        "scheduler: started — conflict check weekdays 08:00, "
+        "watch-date scan daily 09:00, gmail poll every 5 min"
+    )
