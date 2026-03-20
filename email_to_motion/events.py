@@ -281,8 +281,16 @@ def process_calendar_channel() -> int:
                 log.error("calendar: error for %r: %s", event.get("title"), e, exc_info=True)
                 error_lines.append(f"• ⚠️ *{event['title']}* — error: {e}")
 
-        # Mark processed regardless of per-event errors to avoid duplicate sends on retry
-        mark_processed(channel_id, msg["ts"])
+        # Only mark processed when every event was sent successfully.
+        # If any send failed (e.g. SMTP timeout), leave the message unprocessed
+        # so the next poll will retry it.
+        if not error_lines:
+            mark_processed(channel_id, msg["ts"])
+        else:
+            log.warning(
+                "calendar: %d event(s) failed — leaving message unprocessed for retry",
+                len(error_lines),
+            )
 
         reply_parts = []
         if sent_lines:
